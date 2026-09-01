@@ -1,0 +1,24 @@
+# Mērvienību izņēmumi pa artikuliem (SKU).
+#
+# Šis fails uzvar pār kategoriju likumiem `src/esupplier/catalog/units.py`.
+# Izmanto to atsevišķām precēm, kas no savas ģimenes atšķiras — piem. gatava
+# izmēra blīve, kas guļ profilu kategorijā.
+#
+# Formāts:  sku,unit      unit = m | m2 | gab
+# Pēc labošanas:  uv run chat --units   (vai /units konsolē)
+#
+# ---------------------------------------------------------------------------
+# NAV APSTIPRINĀTS — šīs ģimenes pagaidām ir `gab`, jo neviens to nav
+# pateicis. Ja kāda no tām tiek tirgota metros vai kvadrātmetros, pieraksti
+# to kā likumu units.py failā (ne šeit — te ir vieta atsevišķiem SKU):
+#
+#   PTFE materiāli > PTFE Stieņi                      (42) — stieņi: m vai gab?
+#   Termiskās un vibrācijas izolācijas materiāli      (99) — TBK/TBF plāksnes
+#   Tehniskie materiāli > Filcs                            — loksnēs vai metros?
+#   Darbnīcu aprīkojums > Brīdinājuma lentes               — ruļļos?
+#   Darbnīcu aprīkojums > Pretslīdes aprīkojums > Lentes   — ruļļos?
+#   Šļūtenes un aprīkojums > Šļūteņu aizsardzībai >
+#       Aizsargspirāles                                    — pagaidām m (likums)
+# ---------------------------------------------------------------------------
+
+sku,unit

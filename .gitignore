@@ -1,0 +1,39 @@
+# --- noslēpumi ---
+.env
+.env.*
+!.env.example
+
+# --- kataloga kopija ---
+# Sinhronizēts no veikala ar `uv run sync`, 14 MB un noveco katru dienu.
+# `data/units.csv` NAV šeit apzināti: mērvienības ir mūsu dati, ne veikala.
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# --- ģenerētā izvade ---
+# Katra atbilde saglabājas automātiski, tāpēc mape pieaug ar katru jautājumu.
+atbildes/
+.cache/
+
+# Eval palaidējs uzmet vienu failu ar laika zīmogu katrā palaišanā. Nosauktās
+# bāzes (baseline.json, green-7of7.json) paliek — pret tām salīdzina `--compare`.
+evals/results/[0-9]*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# --- rīku kešatmiņas ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- OS un redaktori ---
+.DS_Store
+.idea/
+.vscode/
