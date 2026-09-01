@@ -25,11 +25,14 @@ klienta vēstule
 ```bash
 uv sync                       # atkarības
 cp .env.example .env          # ieliec OPENAI_API_KEY
-uv run sync                   # ievelk katalogu (~3600 produkti)
+uv run sync                   # ievelk katalogu (~3600 produkti, ~85 s)
 uv run chat                   # saruna
 ```
 
 Bez `uv run sync` katalogs ir tukšs un `chat` atsakās startēt.
+
+Pilna uzstādīšana no tukšas mašīnas, pārbaudes soļi un kļūdu ceļi —
+**[SETUP.md](SETUP.md)**.
 
 ## Lietošana
 
