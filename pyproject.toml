@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 sync = "esupplier.catalog.sync:main"
 chat = "esupplier.cli:main"
+mail = "esupplier.mail.run:main"
 evals = "esupplier.evals.run:main"
 
 [build-system]

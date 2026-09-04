@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from ..config import DB_PATH
@@ -85,6 +86,24 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Apstrādātās e-pasta vēstules. Bez šīs tabulas katrs nākamais `uv run mail`
+-- gājiens atbildētu uz tām pašām vēstulēm vēlreiz: IMAP karogs pazūd, tiklīdz
+-- cilvēks atver pastkastīti savā klientā, un `\\Seen` tāpēc nav pietiekams.
+-- `message_id` ir atslēga, nevis UID: UID mainās, pārvietojot vēstuli mapē.
+CREATE TABLE IF NOT EXISTS processed_messages (
+    message_id   TEXT PRIMARY KEY,
+    uid          TEXT DEFAULT '',
+    sender       TEXT DEFAULT '',
+    subject      TEXT DEFAULT '',
+    -- drafted | skipped | failed
+    status       TEXT NOT NULL,
+    reason       TEXT DEFAULT '',
+    answer_path  TEXT DEFAULT '',
+    processed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_status ON processed_messages(status);
 """
 
 # FTS sinhronizācija ar `products` (external content table).
@@ -217,3 +236,70 @@ def clear_products(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM products")
     conn.execute("DELETE FROM products_fts")
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# E-pastu apstrādes žurnāls
+# ---------------------------------------------------------------------------
+def is_processed(conn: sqlite3.Connection, message_id: str) -> bool:
+    """Vai šai vēstulei jau ir bijis gājiens (vienalga ar kādu iznākumu).
+
+    Arī `failed` skaitās apstrādāts: ja modelis vienreiz nokrita, atkārtot to
+    automātiski nozīmē tērēt tokenus tam pašam kritienam katrā gājienā. Cilvēks
+    to atsāk ar `--retry-failed`.
+    """
+    if not message_id:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM processed_messages WHERE message_id = ?", (message_id,)
+    ).fetchone()
+    return row is not None
+
+
+def mark_processed(
+    conn: sqlite3.Connection,
+    message_id: str,
+    *,
+    status: str,
+    uid: str = "",
+    sender: str = "",
+    subject: str = "",
+    reason: str = "",
+    answer_path: str = "",
+) -> None:
+    conn.execute(
+        "INSERT INTO processed_messages"
+        " (message_id, uid, sender, subject, status, reason, answer_path, processed_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(message_id) DO UPDATE SET"
+        " uid=excluded.uid, sender=excluded.sender, subject=excluded.subject,"
+        " status=excluded.status, reason=excluded.reason,"
+        " answer_path=excluded.answer_path, processed_at=excluded.processed_at",
+        (
+            message_id,
+            uid,
+            sender,
+            subject,
+            status,
+            reason,
+            answer_path,
+            datetime.now().astimezone().isoformat(timespec="seconds"),
+        ),
+    )
+    conn.commit()
+
+
+def forget_failed(conn: sqlite3.Connection) -> int:
+    """Izmet `failed` ierakstus, lai nākamais gājiens tos mēģina vēlreiz."""
+    cur = conn.execute("DELETE FROM processed_messages WHERE status = 'failed'")
+    conn.commit()
+    return cur.rowcount
+
+
+def processed_log(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            "SELECT * FROM processed_messages ORDER BY processed_at DESC LIMIT ?",
+            (limit,),
+        )
+    )

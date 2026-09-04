@@ -53,6 +53,34 @@ REQUEST_TIMEOUT_LLM = 120.0
 
 CONTACT_EMAIL = "office@supplier.lv"
 
+# --- Pastkastīte ----------------------------------------------------------
+# Aģents lasa klientu vēstules pa IMAP un raksta atbildi ATPAKAĻ tajā pašā
+# pastkastītē kā melnrakstu. Sūtīšanas ceļa (SMTP) šeit APZINĀTI nav: pilota
+# versijā neviena vēstule klientam neaiziet bez cilvēka klikšķa.
+IMAP_HOST = os.getenv("ESUPPLIER_IMAP_HOST") or ""
+IMAP_PORT = int(os.getenv("ESUPPLIER_IMAP_PORT") or 993)
+IMAP_USER = os.getenv("ESUPPLIER_IMAP_USER") or ""
+IMAP_PASSWORD = os.getenv("ESUPPLIER_IMAP_PASSWORD") or ""
+#: `1` = IMAPS (993). `0` = STARTTLS uz 143. Nešifrētu savienojumu nav.
+IMAP_SSL = (os.getenv("ESUPPLIER_IMAP_SSL") or "1").strip().lower() not in ("0", "false", "no")
+IMAP_FOLDER = os.getenv("ESUPPLIER_IMAP_FOLDER") or "INBOX"
+#: Tukšs = atrodam pēc `\Drafts` special-use karoga, ar atkāpšanos uz "Drafts".
+#: Mapes nosaukums serveriem atšķiras (`Drafts`, `INBOX.Drafts`, `Melnraksti`).
+IMAP_DRAFTS = os.getenv("ESUPPLIER_IMAP_DRAFTS") or ""
+#: IMAP atslēgvārds, ar ko iezīmējam apstrādātās vēstules. Atšķirībā no `\Seen`
+#: tas nepazūd, kad cilvēks vēstuli atver savā pasta klientā.
+IMAP_KEYWORD = os.getenv("ESUPPLIER_IMAP_KEYWORD") or "$AiDrafted"
+#: Cik vēstules apstrādājam vienā gājienā. Katra maksā vienu pilnu aģenta ciklu.
+MAIL_BATCH = int(os.getenv("ESUPPLIER_MAIL_BATCH") or 10)
+#: Pauze sekundēs starp pastkastītes pārbaudēm. Viena pārbaude ir viens IMAP
+#: `SEARCH` — tas nemaksā ne tokenus, ne manāmu laiku, tāpēc minūte ir droša.
+MAIL_POLL_S = int(os.getenv("ESUPPLIER_MAIL_POLL") or 60)
+#: Cik zīmju no vēstules ķermeņa aiziet modelim. Garāka vēstule parasti ir
+#: pārsūtīta sarakste, un tās aste modelim tikai maldina.
+MAIL_BODY_LIMIT = 12000
+IMAP_TIMEOUT = 30.0
+
+
 # --- Cenas izmaksu aprēķinam ---------------------------------------------
 #: USD par 1M tokenu: (ievade, izvade).
 #:

@@ -217,3 +217,12 @@ def save_answer(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_html(letter, title=title), encoding="utf-8")
     return out, dropped
+
+
+def save_internal(text: str, *, answer_path: Path | str) -> Path:
+    out = Path(answer_path)
+    out = out.with_name(out.stem + "-IEKSEJI.txt")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text.strip() + "\n", encoding="utf-8")
+    return out
+

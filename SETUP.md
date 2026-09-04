@@ -66,6 +66,19 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 | `ESUPPLIER_DB` | `data/catalog.db` | cits kataloga ceļš |
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt sagatavotās vēstules |
 
+Ja gribi, lai aģents lasa pastu pats (`uv run mail`, skat. 6.a sadaļu), vajag
+vēl trīs:
+
+```
+ESUPPLIER_IMAP_HOST=lima.trialine.lv
+ESUPPLIER_IMAP_USER=ai.0001@trialine.lv
+ESUPPLIER_IMAP_PASSWORD=...
+```
+
+Pārējie pastkastītes mainīgie (`_PORT`, `_SSL`, `_FOLDER`, `_DRAFTS`,
+`ESUPPLIER_MAIL_BATCH`, `ESUPPLIER_MAIL_POLL`) ir `.env.example` un vajadzīgi
+tikai tad, ja serveris atšķiras no noklusējuma.
+
 **Par modeli:** aģents iet caur OpenAI **Responses API** ar `reasoning.effort`,
 nevis Chat Completions. Modelim jābūt tādam, kas to atbalsta, un tam jābūt
 pieejamam Tavam kontam. Ja nav — skat. 7. sadaļu.
@@ -110,7 +123,7 @@ uv run sync --source=scrape     # rezerves ceļš: sitemap + JSON-LD, lēnāk
 uv run pytest
 ```
 
-Gaidāms `269 passed` zem sekundes. Testi neiet tīklā un nemaksā tokenus. Daļa
+Gaidāms `320 passed` zem sekundes. Testi neiet tīklā un nemaksā tokenus. Daļa
 meklēšanas testu prasa `data/catalog.db` — bez tā tie tiek izlaisti, ne kritīs.
 
 Tad pirmais īstais jautājums:
@@ -131,6 +144,52 @@ uv run chat
 
 Ievade ir daudzrindu — ielīmē visu klienta vēstuli un pabeidz ar rindu `.`
 (vai Ctrl+D). `/help` rāda komandas.
+
+## 6.a Pastkastīte
+
+Šis solis ir neobligāts. Bez tā aģents strādā konsolē; ar to viņš lasa vēstules
+pats un atstāj atbildes kā melnrakstus.
+
+Vispirms pārbaudi savienojumu un to, vai melnrakstu mape ir atrasta:
+
+```bash
+uv run mail --dry-run
+```
+
+Gaidāmā pirmā rinda:
+
+```
+INBOX: 12 vēstules, 3 neapstrādātas · dry-run
+```
+
+`--dry-run` atbildes sagatavo un saglabā mapē `atbildes/`, bet pastkastītē
+neko neraksta un žurnālā neko neieraksta — to var palaist atkārtoti.
+
+Kad izskatās pareizi:
+
+```bash
+uv run mail          # paliek strādāt un seko pastkastītei
+uv run mail --once   # viens gājiens un ārā
+uv run mail --log    # ko izdarīja
+```
+
+Bez argumentiem aģents neapstājas: ik pēc minūtes pārbauda pastkastīti un
+klusē, kamēr nekas nav atnācis. Apstādina ar Ctrl+C. `--once` ir tas pats
+gājiens vienu reizi, un tas ir tas, ko liek cron.
+
+Melnrakstu atrodi pastkastītes mapē `Drafts`. Tur ir **tikai vēstule
+klientam**, sūtāma bez labošanas. Aģents pats neko nesūta: SMTP šajā projektā
+nav.
+
+Uzdevumus menedžerim (rezervācija, termiņš, rēķins, mērvienību pārrēķins)
+izdrukā konsole, un tie paliek failā blakus vēstulei:
+
+```
+atbildes/piedavajums-20260904-081712.html          <- vēstule klientam
+atbildes/piedavajums-20260904-081712-IEKSEJI.txt   <- kas jāizdara ar roku
+```
+
+**Izlasi `-IEKSEJI.txt` pirms sūti melnrakstu.**
 
 ## 7. Kad kaut kas nestrādā
 
@@ -156,10 +215,30 @@ apriti. Kad būs skaidrs, kurš domēns ir galvenais, `SITE_URL` var pārlikt.
 
 **`uv run chat` prasa apstiprināt Python versiju.** `uv python install 3.12`.
 
+**`Trūkst pastkastītes datu.`** `.env` nav `ESUPPLIER_IMAP_HOST`, `_USER` vai
+`_PASSWORD`.
+
+**`Neatradu melnrakstu mapi.`** Serveris nedod `\Drafts` karogu un mape saucas
+citādi. Kļūdas tekstā ir visu mapju saraksts — izvēlies pareizo un ieliec to
+`ESUPPLIER_IMAP_DRAFTS`.
+
+**Melnraksti neparādās, bet `--log` rāda `MELNRAKSTS`.** Skaties citā mapē:
+pirmā rinda pēc palaišanas saka, kur tie iet (`melnraksti -> Drafts`).
+
+**Uz vienu vēstuli divi melnraksti.** Tā nedrīkst notikt: atslēga ir
+`Message-ID`. Ja tas atkārtojas, vēstulei `Message-ID` galvenes nav vispār, un
+atslēga ir mapes UID — tas mainās, pārvietojot vēstuli citā mapē.
+
+**`--log` rāda `KRITA` ar "atbilde tika apcirsta".** Modelis netika līdz
+atbildes beigām. Melnraksts APZINĀTI netiek taisīts: apcirsta atbilde izskatās
+pēc pilnas vēstules bez uzdevumiem menedžerim. Atbildi ar roku konsolē vai
+palaid `uv run mail --retry-failed`.
+
 ## 8. Ikdienas darbs
 
 ```bash
 uv run chat                    # saruna
+uv run mail                    # pastkastīte: vēstules -> melnraksti
 uv run sync                    # katalogs (atlikumi un cenas mainās)
 uv run pytest                  # pēc koda izmaiņām
 uv run evals                   # pēc prompta izmaiņām — maksā tokenus

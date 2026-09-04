@@ -3,12 +3,13 @@
 Konsoles asistents, kas no klienta e-pasta sagatavo **gatavu piedāvājuma
 vēstuli** pēc e-supplier.lv kataloga.
 
-Menedžeris ielīmē klienta vēstuli, aģents sameklē preces vietējā kataloga kopijā
-un atdod divas daļas: vēstuli, ko var nosūtīt neko nepārrakstot, un iekšējo
-bloku ar to, kas jāizdara ar roku. Uz e-pastu aiziet tikai pirmā daļa.
+Menedžeris ielīmē klienta vēstuli — vai aģents to izlasa pastkastītē pats —
+un saņem divas daļas: vēstuli, ko var nosūtīt neko nepārrakstot, un iekšējo
+bloku ar to, kas jāizdara ar roku. Klientam aiziet tikai pirmā daļa, un tikai
+tad, kad cilvēks nospiež "Sūtīt".
 
 ```
-klienta vēstule
+klienta vēstule  ──►  konsole (ielīmē)   vai   IMAP pastkastīte
       │
       ▼
   aģenta cikls  ──►  search_products / get_product / browse_category
@@ -17,7 +18,8 @@ klienta vēstule
       │            data/catalog.db  (SQLite + FTS5, 3568 produkti)
       ▼
   vēstule klientam  ───►  atbildes/piedavajums-*.html   (bildes, tabulas)
-  ⚑ IEKŠĒJI         ───►  tikai konsolē, failā nekad
+                    ───►  melnraksts pastkastītes mapē Drafts
+  ⚑ IEKŠĒJI         ───►  konsolē un atbildes/*-IEKSEJI.txt; melnrakstā nekad
 ```
 
 ## Sākums
@@ -69,6 +71,78 @@ uv run chat --ask "Cik maksā silikona gumija 2mm biezumā?"
 cat vestule.txt | uv run chat          # viss ķermenis = viena ziņa
 uv run chat --ask - < vestule.txt
 ```
+
+## Pastkastīte
+
+Aģents var lasīt klientu vēstules pats un atstāt atbildi kā **melnrakstu** tajā
+pašā pastkastītē. SMTP šeit nav un nebūs: vēstule klientam aiziet tikai tad, kad
+cilvēks melnrakstu atver, izlasa iekšējās piezīmes, izdzēš tās un nospiež
+"Sūtīt".
+
+```bash
+uv run mail                 # seko pastkastītei, līdz nospiež Ctrl+C
+uv run mail --once          # viens gājiens un ārā (cron, pārbaudes)
+uv run mail --dry-run       # sagatavo atbildes, bet pastkastītē neko neraksta
+uv run mail --retry-failed  # atkārto tās, kas iepriekš krita
+uv run mail --log           # ko jau esam apstrādājuši
+```
+
+Palaists bez argumentiem, aģents **paliek strādāt** un ik pēc minūtes pārbauda,
+vai nav atnākušas jaunas vēstules. Kamēr nekas nav atnācis, tas klusē: ekrāna
+apakšā ir viena rinda ar pēdējās pārbaudes laiku, un tā pārrakstās pati.
+
+```
+Sekoju pastkastītei, pārbaude ik pēc 60s. Ctrl+C, lai apstātos.
+INBOX: 42 vēstules, 0 neapstrādātas · melnraksti -> Drafts
+⠹ Gaidu jaunas vēstules · pēdējā pārbaude 09:14:02 · 3 melnraksti, 7 izlaisti, 0 krita
+```
+
+Ritmu maina `--interval` vai `ESUPPLIER_MAIL_POLL`. Ja serveris nokrīt vai
+pazūd tīkls, aģents neapstājas: pauze dubultojas līdz desmit minūtēm un
+atgriežas parastajā ritmā, tiklīdz savienojums atjaunojas.
+
+Pieeja nāk no `.env` (`ESUPPLIER_IMAP_HOST`, `_USER`, `_PASSWORD`). Melnrakstu
+mapi meklējam pēc servera `\Drafts` karoga; ja serveris to nedod, ejam pēc
+nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
+`ESUPPLIER_IMAP_DRAFTS`.
+
+### Ko aģents ar vēstuli izdara
+
+| Solis | Kas notiek |
+|---|---|
+| Citāti un paraksts | nogriezti — citādi pārsūtītā sarakstē minētā vecā prece nonāk jaunajā piedāvājumā |
+| Pielikumi | saturu nelasām, bet nosaukumi aiziet modelim un iekšējā blokā |
+| Jaunumi, auto-atbildes, `no-reply` | izlaisti pirms modeļa, ne pēc |
+| Adresāts | `Reply-To`, ja tāds ir; citādi `From` |
+| Ķēde | `In-Reply-To` un `References`, lai atbilde nesadala sarunu divās vietās |
+
+### Kur paliek iekšējais bloks
+
+**Melnrakstā tā nav.** Melnraksts ir domāts nosūtīšanai bez labošanas, un
+bloks, kas pirms tam jāizdzēš ar roku, agri vai vēlu paliek neizdzēsts.
+
+Uzdevumi menedžerim aiziet divās vietās: konsolē gājiena laikā un failā
+`atbildes/piedavajums-*-IEKSEJI.txt` blakus vēstulei. Fails ir `.txt`, ne
+`.html`, tieši tāpēc, ka `.html` failu menedžeris atver un kopē.
+
+Turpat nonāk brīdinājumi, ko interaktīvajā režīmā izdrukā konsole: izmestās
+bildes, iekšējās adreses noplūde, sasniegts rīku limits, neizlasīti pielikumi.
+Ilgā sekošanā konsolē neviens neskatās.
+
+**Apcirsta atbilde melnrakstā nenonāk vispār.** Iekšējais bloks ir pēdējais, ko
+modelis raksta, tāpēc apcirsta atbilde izskatās pēc pilnas vēstules, kurai nav
+ko piebilst. Tāda vēstule paliek pastkastītē neapstrādāta, un `--log` rāda
+`KRITA`.
+
+### Divreiz uz vienu vēstuli neatbildam
+
+Apstrādātās vēstules glabājas `processed_messages` tabulā (atslēga —
+`Message-ID`) un papildus tiek iezīmētas ar IMAP atslēgvārdu `$AiDrafted`.
+Atslēgvārds vien nepietiktu: `\Seen` pazūd, tiklīdz cilvēks pastkastīti atver
+savā pasta klientā.
+
+Kritušās vēstules atslēgvārdu **nedabū** — cilvēks tās pastkastītē redz kā
+neapstrādātas, un `--retry-failed` tās atgriež ciklā.
 
 ## Atbildes formāts
 
@@ -138,7 +212,7 @@ visus klienta nosauktos skaitļus, rīks to pasaka `notes` laukā.
 ## Testi un evals
 
 ```bash
-uv run pytest                                    # 269 testi, bez API izsaukumiem
+uv run pytest                                    # 320 testi, bez API izsaukumiem
 uv run evals                                     # visi gadījumi (maksā tokenus)
 uv run evals --case vienkarsais                  # viens
 uv run evals --compare green-7of7.json           # pret iepriekšēju rezultātu
@@ -162,6 +236,11 @@ src/esupplier/
     prompts.py        sistēmas prompts (nozares zināšanas + atbildes formāts)
     tools.py          rīku definīcijas un izpilde
     loop.py           modelis → rīki → modelis
+  mail/
+    run.py            pastkastītes gājiens: vēstule → melnraksts
+    imap.py           savienojums, mapes, APPEND
+    message.py        MIME → teksts; citāti, paraksti, filtri
+    draft.py          vēstule → MIME melnraksts ar ķēdes galvenēm
   catalog/
     sync.py           Store API / scrape → SQLite
     normalize.py      brīvs teksts → tipizēti lauki
@@ -184,6 +263,14 @@ atbildes/*.html       sagatavotās vēstules
 | `ESUPPLIER_EFFORT` | `medium` | domāšanas dziļums; ar `minimal` retāk ķeras pie rīkiem |
 | `ESUPPLIER_DB` | `data/catalog.db` | kataloga ceļš |
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt HTML |
+| `ESUPPLIER_IMAP_HOST` | — | pastkastītes serveris (`uv run mail`) |
+| `ESUPPLIER_IMAP_USER` | — | lietotājvārds |
+| `ESUPPLIER_IMAP_PASSWORD` | — | parole |
+| `ESUPPLIER_IMAP_PORT` | `993` | IMAPS; ar `_SSL=0` STARTTLS uz 143 |
+| `ESUPPLIER_IMAP_FOLDER` | `INBOX` | ko lasīt |
+| `ESUPPLIER_IMAP_DRAFTS` | — | melnrakstu mape; tukšs = atrodam paši |
+| `ESUPPLIER_MAIL_BATCH` | `10` | cik vēstules vienā gājienā |
+| `ESUPPLIER_MAIL_POLL` | `60` | pauze sekundēs starp pārbaudēm |
 
 ## Zināmās robežas
 
