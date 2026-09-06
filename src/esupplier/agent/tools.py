@@ -48,6 +48,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "BEZ PVN; ja tā ir null, cena katalogā nav publicēta — neizdomā to. "
             "`image_url` ir produkta foto — to KOPĒ atbildē burtu pa burtam "
             "(![nosaukums](image_url)); nekad neizdomā attēla adresi. "
+            "`url` ir produkta lapa veikalā — to arī KOPĒ burtu pa burtam; "
+            "nekad neizdomā adresi un nekad nesaliec to no artikula. "
+            "`in_stock` ir vienīgais pieejamības lauks un tas ir true/false: "
+            "precīzs atlikuma skaitlis šeit netiek atdots APZINĀTI, tāpēc "
+            "vēstulē neraksti ne skaitli, ne \"pieejami N gab.\". "
             "Lauks `notes` brīdina, ja filtri tika atlaisti, lai vispār kaut ko "
             "atrastu."
         ),
@@ -376,7 +381,6 @@ def _run_get_product(args: dict[str, Any], conn: sqlite3.Connection) -> tuple[di
             "hardness_sha": product.hardness_sha,
             "oil_resistant": product.oil_resistant,
             "chemical_resistant": product.chemical_resistant,
-            "stock_text": product.stock_text,
             "categories": product.categories,
             "attributes": product.attributes,
         }

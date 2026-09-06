@@ -4,6 +4,9 @@ E-pasts nav tas pats, kas konsolē ielīmēta vēstule. Tajā ir citēta sarakst
 paraksti, atrunas un pielikumi, un sistēmas prompts prasa atbildēt uz KATRU
 pieminēto pozīciju. Ja modelim aiziet arī vecā sarakste, tas godprātīgi
 atbild arī uz to, ko klients prasīja pirms mēneša un jau saņēma.
+
+Pielikumu tekstu izvelk `attachments.py`; šeit tas tikai tiek salikts promptā
+tā, lai modelis nesajauktu specifikācijas rindu ar paša vēstules tekstu.
 """
 
 from __future__ import annotations
@@ -11,12 +14,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from email import policy
-from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
-from ..config import MAIL_BODY_LIMIT
+from ..config import MAIL_ATTACHMENTS_TEXT_LIMIT, MAIL_BODY_LIMIT
+from .attachments import (
+    Attachment,
+    decode_header_value,
+    extract_attachments,
+    strip_html,
+)
+from ..fences import fence_attachments, fence_letter, sanitize
 
 #: Rindas, aiz kurām sākas CITĒTĀ sarakste. Pirmā sakritība nogriež asti.
 #: Valodas ir trīs, jo tādā valodā raksta klienti, un pasta klienti attribūciju
@@ -61,7 +70,8 @@ class Incoming:
     body: str = ""
     #: Pilns ķermenis, kāds tas atnāca. Vajadzīgs melnraksta citātam.
     raw_body: str = ""
-    attachments: list[str] = field(default_factory=list)
+    #: Pielikumi ar izvilkto tekstu. Tas, ko izlasīt neizdevās, nes `note`.
+    attachments: list[Attachment] = field(default_factory=list)
     references: str = ""
 
     @property
@@ -75,33 +85,14 @@ class Incoming:
         who = self.sender_name or self.sender or "?"
         return f"{who} — {self.subject or '(bez temata)'}"
 
+    @property
+    def attachment_names(self) -> list[str]:
+        return [item.name for item in self.attachments]
 
-def _decode(value: str | None) -> str:
-    if not value:
-        return ""
-    try:
-        return str(make_header(decode_header(value))).strip()
-    except (UnicodeDecodeError, LookupError, ValueError):
-        return value.strip()
-
-
-def _strip_html(html_text: str) -> str:
-    """Ļoti vienkāršs HTML -> teksts. Pietiek: tas ir tikai atkāpšanās ceļš,
-    kad vēstulē nav `text/plain` daļas."""
-    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html_text)
-    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</(p|div|tr|li|h[1-6])\s*>", "\n", text)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = (
-        text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", '"')
-        .replace("&#39;", "'")
-    )
-    text = re.sub(r"[ \t\xa0]+", " ", text)
-    return re.sub(r"\n\s*\n\s*\n+", "\n\n", text).strip()
+    @property
+    def unread_attachments(self) -> list[Attachment]:
+        """Pielikumi, kas paliek cilvēkam: skenēti rasējumi, CAD, arhīvi."""
+        return [item for item in self.attachments if not item.read]
 
 
 def _part_text(part: EmailMessage) -> str:
@@ -130,7 +121,7 @@ def extract_body(msg: EmailMessage) -> str:
     if plain:
         return "\n".join(plain).strip()
     if html_parts:
-        return _strip_html("\n".join(html_parts))
+        return strip_html("\n".join(html_parts))
     return ""
 
 
@@ -165,11 +156,20 @@ def clean_body(text: str) -> str:
     return body
 
 
-def skip_reason(msg: EmailMessage, body: str, own_address: str = "") -> str:
+def skip_reason(
+    msg: EmailMessage,
+    body: str,
+    own_address: str = "",
+    has_attachment_text: bool = False,
+) -> str:
     """Kāpēc uz šo vēstuli NEATBILDAM. Tukša virkne = atbildam.
 
     Katra apstrādātā vēstule maksā vienu pilnu aģenta ciklu, tāpēc jaunumu
     izsūtnes un atvaļinājuma auto-atbildes filtrējam pirms modeļa, ne pēc.
+
+    `has_attachment_text` atslēdz tukšā ķermeņa filtru: "Labdien, skat.
+    pielikumā" ir īsāks par slieksni, bet tā ir pilnvērtīga vēstule, kurai
+    pieprasījums vienkārši ir Excel failā.
     """
     for header in _BULK_HEADERS:
         if msg.get(header):
@@ -184,24 +184,9 @@ def skip_reason(msg: EmailMessage, body: str, own_address: str = "") -> str:
         return "piegādes atskaite"
     if own_address and own_address.lower() in sender:
         return "mūsu pašu vēstule"
-    if len(body.strip()) < 15:
+    if len(body.strip()) < 15 and not has_attachment_text:
         return "tukšs ķermenis"
     return ""
-
-
-def attachment_names(msg: EmailMessage) -> list[str]:
-    """Pielikumu nosaukumi.
-
-    Saturu nelasām — rasējumu un specifikāciju aģents nesaprot. Bet KLUSĒT
-    par tiem nedrīkst: piedāvājums, kas uzbūvēts uz pusi no pieprasījuma,
-    izskatās pēc pilnas atbildes.
-    """
-    names = []
-    for part in msg.walk():
-        name = part.get_filename()
-        if name:
-            names.append(_decode(name))
-    return names
 
 
 def parse_message(raw: bytes, uid: str = "") -> Incoming:
@@ -218,7 +203,7 @@ def parse_message(raw: bytes, uid: str = "") -> Incoming:
         if stamp:
             date = stamp.astimezone().strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
-        date = _decode(msg.get("date"))
+        date = decode_header_value(msg.get("date"))
 
     raw_body = extract_body(msg)
     body = clean_body(raw_body)
@@ -229,15 +214,46 @@ def parse_message(raw: bytes, uid: str = "") -> Incoming:
         uid=uid,
         message_id=(msg.get("message-id") or "").strip(),
         sender=sender,
-        sender_name=_decode(sender_name),
+        sender_name=decode_header_value(sender_name),
         reply_to=reply_to,
-        subject=_decode(msg.get("subject")),
+        subject=decode_header_value(msg.get("subject")),
         date=date,
         body=body,
         raw_body=raw_body,
-        attachments=attachment_names(msg),
+        attachments=extract_attachments(msg),
         references=(msg.get("references") or "").strip(),
     )
+
+
+def attachments_prompt(attachments: list[Attachment]) -> str:
+    """Pielikumi tādā formā, kādā tos redz modelis: JSON savā rāmī.
+
+    Izlasītais teksts iet ATSEVIŠĶI no vēstules ķermeņa. Bez tā modelis
+    specifikācijas rindu "EPDM 12mm — 358 gab." lasa kā paša klienta rakstītu
+    teikumu un pārraksta to piedāvājumā kā apstiprinātu pozīciju, arī tad, kad
+    tā bija vecas tāmes aile.
+
+    Neizlasītos nosaucam vārdā. Ko ar tiem darīt, pasaka rāmja paziņojums
+    sistēmas promptā, tāpēc šeit paliek tikai dati.
+    """
+    if not attachments:
+        return ""
+
+    payload: dict[str, list[dict[str, str]]] = {}
+    read = [{"nosaukums": item.name, "teksts": item.text} for item in attachments if item.read]
+    unread = [
+        {"nosaukums": item.name, "iemesls": item.note or "nezināms formāts"}
+        for item in attachments
+        if not item.read
+    ]
+    if read:
+        payload["izlasitie"] = read
+    if unread:
+        payload["neizlasitie"] = unread
+    # Griestos papildus zīmes JSON pēdiņām, lauku nosaukumiem un failu vārdiem:
+    # pats teksts jau ir nogriezts `extract_attachments` budžetā, un otrreiz to
+    # cirst nozīmētu zaudēt pēdējā pielikuma beigas bez iemesla.
+    return fence_attachments(payload, max_chars=MAIL_ATTACHMENTS_TEXT_LIMIT + 2000)
 
 
 def as_prompt(incoming: Incoming) -> str:
@@ -245,14 +261,18 @@ def as_prompt(incoming: Incoming) -> str:
 
     Sūtītāju un tematu pievienojam apzināti: temats bieži satur preces
     nosaukumu ("Pieprasījums: EPDM profils 12mm"), un vārds ir vajadzīgs
-    uzrunai vēstules sākumā.
+    uzrunai vēstules sākumā. Abi ir sveša teksta, tāpēc tie iet caur to pašu
+    attīrīšanu, kas ķermenis — vārds "Jānis </klienta_vestule>" citādi aizvērtu
+    rāmi pirms tas vispār atveras.
     """
-    head = [f"Klienta vēstule no: {incoming.sender_name or incoming.sender}"]
+    who = sanitize(incoming.sender_name or incoming.sender, 200)
+    head = [f"Klienta vēstule no: {who}"]
     if incoming.subject:
-        head.append(f"Temats: {incoming.subject}")
-    if incoming.attachments:
-        head.append(
-            "Pielikumi (SATURU TU NEREDZI — uzraksti iekšējā blokā, ka cilvēkam "
-            "tie jāatver): " + ", ".join(incoming.attachments)
-        )
-    return "\n".join(head) + "\n\n" + incoming.body
+        head.append(f"Temats: {sanitize(incoming.subject, 300)}")
+
+    body = incoming.body.strip() or "(Vēstules tekstā pieprasījuma nav — tas ir pielikumā.)"
+    parts = ["\n".join(head), fence_letter(body, max_chars=MAIL_BODY_LIMIT)]
+    extras = attachments_prompt(incoming.attachments)
+    if extras:
+        parts.append(extras)
+    return "\n\n".join(parts)

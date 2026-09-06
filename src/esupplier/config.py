@@ -80,6 +80,21 @@ MAIL_POLL_S = int(os.getenv("ESUPPLIER_MAIL_POLL") or 60)
 MAIL_BODY_LIMIT = 12000
 IMAP_TIMEOUT = 30.0
 
+# --- Pielikumi ------------------------------------------------------------
+# Rasējums, specifikācija un cenu tabula ir puse pieprasījuma. Aģents no tiem
+# lasa TEKSTU; skenēts rasējums teksta nesatur un paliek cilvēkam.
+#
+#: Cik lielu pielikumu vispār atveram. Produktu katalogs PDF formātā mēdz būt
+#: desmitiem MB, un tā saturs nav pieprasījums.
+MAIL_ATTACHMENT_MAX_BYTES = int(os.getenv("ESUPPLIER_ATTACHMENT_MAX_BYTES") or 10_000_000)
+#: Cik zīmju no VIENA pielikuma aiziet modelim.
+MAIL_ATTACHMENT_TEXT_LIMIT = int(os.getenv("ESUPPLIER_ATTACHMENT_CHARS") or 4000)
+#: Cik zīmju kopā no visiem pielikumiem. Bez šī limita divi gari PDF izspiestu
+#: no konteksta pašu vēstuli, kuras dēļ viss notiek.
+MAIL_ATTACHMENTS_TEXT_LIMIT = int(os.getenv("ESUPPLIER_ATTACHMENTS_CHARS") or 12000)
+#: Cik PDF lapu lasām. Pieprasījums ir pirmajās; tālāk sākas tipveida noteikumi.
+MAIL_ATTACHMENT_PDF_PAGES = int(os.getenv("ESUPPLIER_ATTACHMENT_PDF_PAGES") or 20)
+
 
 # --- Cenas izmaksu aprēķinam ---------------------------------------------
 #: USD par 1M tokenu: (ievade, izvade).

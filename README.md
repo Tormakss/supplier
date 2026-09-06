@@ -9,7 +9,7 @@ bloku ar to, kas jāizdara ar roku. Klientam aiziet tikai pirmā daļa, un tikai
 tad, kad cilvēks nospiež "Sūtīt".
 
 ```
-klienta vēstule  ──►  konsole (ielīmē)   vai   IMAP pastkastīte
+klienta vēstule  ──►  konsole (ielīmē)  ·  Claude Code  ·  IMAP pastkastīte
       │
       ▼
   aģenta cikls  ──►  search_products / get_product / browse_category
@@ -72,6 +72,38 @@ cat vestule.txt | uv run chat          # viss ķermenis = viena ziņa
 uv run chat --ask - < vestule.txt
 ```
 
+## Claude Code
+
+Katalogu var lietot arī no Claude Code sesijas, bez OpenAI atslēgas: Claude Code
+iet uz abonementa. Repozitorijā ir divi faili, kas to savieno.
+
+`.mcp.json` pieslēdz MCP serveri ar tiem PAŠIEM četriem rīkiem, ko lieto
+`uv run chat` — `search_products`, `get_product`, `browse_category`,
+`list_categories`. Rīku definīcijas nāk no `agent/tools.py`; otras kopijas nav.
+
+`.claude/skills/piedavajums/` ir prasme ar uzvedības noteikumiem: cenas abās PVN
+pusēs, mērvienība no datiem, ko nedrīkst apsolīt. Tā ir sistēmas prompta
+**atvasinājums**, ne otra kopija:
+
+```bash
+uv run skill        # pārraksta prasmi no src/esupplier/agent/prompts.py
+```
+
+Labo promptu un palaid `uv run skill`. Ja aizmirsti, `uv run pytest` krīt —
+citādi konsole un Claude Code sesija kļūtu par diviem dažādiem aģentiem ar vienu
+nosaukumu, un tas neizskatītos pēc kļūdas, tikai pēc "šodien atbild savādāk".
+
+Serveri ar roku palaist nevajag; to dara Claude Code. Pārbaudei:
+
+```bash
+uv run mcp-katalogs      # stdio; klusē, līdz klients kaut ko pajautā
+```
+
+**Pastkastītes dēmons uz abonementa neiet.** `uv run mail` visu diennakti pats
+aptaujā `INBOX`, un tā nav interaktīva sesija. Anthropic Agent SDK dokumentācija
+to pasaka tieši: bez iepriekšējas atļaujas claude.ai pieteikšanos un tās limitus
+trešo pušu produktos lietot nedrīkst. Dēmons paliek uz sava ceļa ar savu atslēgu.
+
 ## Pastkastīte
 
 Aģents var lasīt klientu vēstules pats un atstāt atbildi kā **melnrakstu** tajā
@@ -111,10 +143,36 @@ nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
 | Solis | Kas notiek |
 |---|---|
 | Citāti un paraksts | nogriezti — citādi pārsūtītā sarakstē minētā vecā prece nonāk jaunajā piedāvājumā |
-| Pielikumi | saturu nelasām, bet nosaukumi aiziet modelim un iekšējā blokā |
+| Pielikumi | PDF, Word, Excel, teksts un CSV tiek atvērti; teksts aiziet modelim atsevišķā, iežogotā blokā |
+| Pielikumi, ko neizlasa | skenēti PDF, attēli, CAD, arhīvi — nosaukums un iemesls aiziet modelim un iekšējā blokā |
 | Jaunumi, auto-atbildes, `no-reply` | izlaisti pirms modeļa, ne pēc |
 | Adresāts | `Reply-To`, ja tāds ir; citādi `From` |
 | Ķēde | `In-Reply-To` un `References`, lai atbilde nesadala sarunu divās vietās |
+| Svešs teksts | vēstule un pielikumi aiziet rāmī kā dati (skat. [Svešs teksts un izcelsme](#svešs-teksts-un-izcelsme)) |
+| Artikuli un cenas | salīdzināti ar rīku atbildēm; kas nesakrīt, aiziet menedžerim |
+
+### Ko aģents izlasa pielikumā
+
+| Formāts | Kas notiek |
+|---|---|
+| `.pdf` | teksts no pirmajām 20 lapām; PDF ar paroli mēģinām atvērt ar tukšu paroli |
+| `.docx` | rindkopas un tabulas (šūnas atdalītas ar `\|`) |
+| `.xlsx`, `.xlsm` | rindas pa lapām, ar lapas nosaukumu |
+| `.txt`, `.csv`, `.md`, `.xml`, `.json` | teksts; bez kodējuma galvenē mēģinām `utf-8`, tad `cp1257` |
+| `.html` | teksts bez iezīmēm |
+| attēli, `.dwg`, `.dxf`, `.doc`, `.xls`, arhīvi | **netiek lasīti** — nosaukums un iemesls aiziet iekšējā blokā |
+
+**Skenēts PDF ir bilde.** Ja teksta tajā nav, pielikums paliek atzīmēts kā
+neizlasīts, un iekšējā blokā menedžeris redz "PDF bez teksta (skenēts vai
+rasējums) — jāatver ar roku". Tukšs izvilkums, kas izliktos par izlasītu, būtu
+sliktāks par neizlasīšanu vispār: modelis klusētu par pusi pieprasījuma.
+
+Pielikuma teksts modelim iet **atsevišķi no vēstules ķermeņa**, savā rāmī.
+Citādi specifikācijas rinda "EPDM 12 mm — 358 gab." lasās kā paša klienta
+rakstīts teikums, arī tad, kad tā bija vecas tāmes aile.
+
+Tāpēc, ka pieprasījums var būt tikai pielikumā, vēstule ar īsu ķermeni
+("Sk. pielikumā") vairs netiek izlaista kā tukša, ja pielikumā teksts ir.
 
 ### Kur paliek iekšējais bloks
 
@@ -126,7 +184,8 @@ Uzdevumi menedžerim aiziet divās vietās: konsolē gājiena laikā un failā
 `.html`, tieši tāpēc, ka `.html` failu menedžeris atver un kopē.
 
 Turpat nonāk brīdinājumi, ko interaktīvajā režīmā izdrukā konsole: izmestās
-bildes, iekšējās adreses noplūde, sasniegts rīku limits, neizlasīti pielikumi.
+bildes, iekšējās adreses noplūde, sasniegts rīku limits, neizlasīti pielikumi
+un tie, kuru saturs modelim aizgāja automātiski.
 Ilgā sekošanā konsolē neviens neskatās.
 
 **Apcirsta atbilde melnrakstā nenonāk vispār.** Iekšējais bloks ir pēdējais, ko
@@ -144,18 +203,56 @@ savā pasta klientā.
 Kritušās vēstules atslēgvārdu **nedabū** — cilvēks tās pastkastītē redz kā
 neapstrādātas, un `--retry-failed` tās atgriež ciklā.
 
+## Svešs teksts un izcelsme
+
+Klienta vēstule un pielikuma saturs ir teksts, ko rakstīja kāds cits. PDF failā
+var būt "aizmirsti iepriekšējos norādījumus", un faila nosaukumu izvēlas
+sūtītājs. Divas pārbaudes to notur.
+
+**Iežogošana.** Viss svešais teksts modelim aiziet rāmī ar nemainīgu birku:
+vēstule `<klienta_vestule>`, pielikumi `<klienta_pielikumi>` kā JSON. Pirms
+rāmja tas tiek attīrīts — nost neredzamās un vadības rakstzīmes, viltotie
+gājienu marķieri (`Human:` aiz tukšas rindas) un rīku izsaukumu birkas. Birka ir
+avota literālis, nekad no ienākošiem datiem, tāpēc svešs teksts robežu atkārtot
+nevar. Sistēmas prompts par abiem rāmjiem pasaka, ka tie ir dati, ne norādījumi.
+
+Pielikumi iet kā JSON, ne kā mūsu pašu rakstīti atdalītāji. Ar rindu
+`--- PIELIKUMS x ---` pielikums varētu tādu rindu uzrakstīt pats un izlikties
+par nākamo failu; JSON pēdiņās tas ir tikai teksts.
+
+Pašu iežogošanu dara `src/esupplier/vendor/fencing.py` — Anthropic
+[`commerce-agents`](https://github.com/anthropics/commerce-agents) modulis,
+ievests nemainīts ar Apache 2.0 licenci. Izcelsme, revīzija un iemesls —
+`src/esupplier/vendor/README.md`; kopsavilkums — `NOTICE`. Mūsu puse ar birkām
+un paziņojumiem ir `src/esupplier/fences.py`.
+
+**Izcelsme.** Vēstulē drīkst būt tikai tas, ko rīks šajā gājienā tiešām atdeva.
+Pirms melnraksta katrs artikuls un katra cena tiek salīdzināta ar rīku atbildēm,
+un tas, kas nesakrīt, aiziet menedžerim tāpat kā izmestās bildes. Promptā šis
+aizliegums ir pirmais noteikums, bet prompts nav pārbaude.
+
+Cenu pārbaude pieņem plaši un apzināti: kataloga cena, tā reizināta ar jebkuru
+vēstulē minētu skaitli, tas pats ar PVN, un vairāku pozīciju kopsumma. Kļūda uz
+"atzīstam" pusi maksā palaistu garām skaitli; kļūda uz otru pusi maksā
+brīdinājumu pie katras vēstules, un tādus pēc nedēļas vairs neviens nelasa.
+
+Bez rīku atbildes abas pārbaudes klusē: salīdzināt nav ar ko.
+
 ## Atbildes formāts
 
 Atbilde vienmēr ir divās daļās, starp tām rinda ar `---`:
 
-1. **Vēstule klientam** — sveiciens, produktu tabula ar foto, cena bez PVN *un*
-   ar PVN, daudzuma teikums par katru pozīciju, salīdzinājuma tabula, ja
-   piedāvātais atšķiras no prasītā, un ne vairāk kā 4 precizējošie jautājumi.
-2. **`⚑ IEKŠĒJI (klientam nesūtīt)`** — obligāts. Divas sadaļas:
+1. **Vēstule klientam** — sveiciens, produktu tabula (foto, artikuls, nosaukums,
+   cena bez PVN *un* ar PVN, `Ir`/`Nav`, saite uz veikalu), daudzuma teikums par
+   katru pozīciju, salīdzinājuma tabula, ja piedāvātais atšķiras no prasītā, un
+   ne vairāk kā 4 precizējošie jautājumi.
+2. **`⚑ IEKŠĒJI (klientam nesūtīt)`** — obligāts. Divas sadaļas plus atlikums:
    - `JĀIZDARA` — uzdevumi cilvēkam: rezervācija, piegādes termiņš, rēķins,
-     mērvienības pārrēķins, iztrūkums pret atlikumu.
+     mērvienības pārrēķins, atlikuma pārbaude.
    - `NEAPSTIPRINĀTS` — ko no datiem nevarēja apstiprināt un kur meklēšana bija
      nedroša.
+   - `ATLIKUMS NOLIKTAVĀ` — pa rindai uz katru vēstulē nosaukto artikulu. To
+     raksta programma, ne modelis.
 
 Aģents pats **nesola** rēķinu, rezervāciju, piegādes termiņu, apmaksas
 nosacījumus, atlaidi vai transportu — tie ir menedžera lēmumi un iet iekšējā
@@ -164,6 +261,35 @@ blokā. Klientam tas skan "precizēs kolēģis".
 Ja bloka nav vai atbilde tika apcirsta, konsole to pasaka atsevišķi. Bloka
 trūkums menedžerim izskatās pēc "nekas nav jādara", un tas ir bīstamākais
 klusējums, kāds šeit iespējams.
+
+## Noliktava un saites
+
+**Klientam pieejamība ir `Ir` vai `Nav`.** Precīzs atlikuma skaitlis vēstulē
+nenonāk, un tas nav prompta lūgums — modelim tā vienkārši nav. `stock_qty` un
+`stock_text` no rīku atbildēm ir izņemti (`Product.to_search_dict`), tāpēc
+skaitli nokopēt nav no kurienes. Atlikums mainās ātrāk, nekā vēstule aiziet, un
+skaitlis, ko klients izlasīja, kļūst par solījumu.
+
+Menedžerim skaitlis ir vajadzīgs, un tas ir katrā vēstulē: `report.stock_notes`
+paņem to no datubāzes par katru vēstulē nosaukto artikulu un ieliek iekšējā
+blokā. To dara programma, tāpēc tas ir tur vienmēr, ne tikai tad, kad modelis
+atcerējās pajautāt.
+
+```
+ATLIKUMS NOLIKTAVĀ (klientam nesūtīt)
+- art. 000015202 — noliktavā 121 gab.
+- art. 000029023 — noliktavā NAV
+```
+
+Ja skaitlis tomēr parādās vēstulē, tas ir izdomāts, un `report.stock_leaks` to
+noķer: skaitlis blakus vārdam "noliktavā", kā arī vārdi "atlikums" un "krājums".
+Brīdinājums aiziet menedžerim.
+
+**Katrai pozīcijai ir saite uz veikalu.** Rīki atdod `url`, un modelis to kopē
+tabulas ailē kā `[Skatīt](url)`. Pirms melnraksta `report.verify_links` salīdzina
+katru saiti ar kataloga adresēm; kas nesakrīt, tiek izmesta, tāpat kā bildes.
+Adrese, salikta no artikula, klientam atveras kā 404, un tas ir sliktāk nekā
+saites trūkums.
 
 ## Mērvienības
 
@@ -212,7 +338,7 @@ visus klienta nosauktos skaitļus, rīks to pasaka `notes` laukā.
 ## Testi un evals
 
 ```bash
-uv run pytest                                    # 320 testi, bez API izsaukumiem
+uv run pytest                                    # 408 testi, bez API izsaukumiem
 uv run evals                                     # visi gadījumi (maksā tokenus)
 uv run evals --case vienkarsais                  # viens
 uv run evals --compare green-7of7.json           # pret iepriekšēju rezultātu
@@ -220,6 +346,11 @@ uv run evals --compare green-7of7.json           # pret iepriekšēju rezultātu
 
 `tests/` ir ātri un bez tīkla; daļa meklēšanas testu skrien pret īsto
 `data/catalog.db` un tiek izlaisti, ja tā nav.
+
+`tests/test_vendor_fencing.py` ir ievestā `commerce-agents` moduļa paša testi,
+mainīts tikai importa ceļš. Tie ir tur tāpēc, ka nākamajā versijas celšanā
+pateiks, vai uzvedība mainījās. `tests/helpers_files.py` ģenerē īstus PDF, DOCX
+un XLSX failus — pielikumu lasīšanu ar izliktiem baitiem pārbaudīt nevar.
 
 `evals/cases.jsonl` ir gadījumi ar substring pārbaudēm, rīku izsaukumu limitiem
 un LLM-as-judge kritērijiem. Rezultāti krīt `evals/results/`, izejas kods 1, ja
@@ -231,7 +362,11 @@ kāds krita — var likt CI.
 src/esupplier/
   cli.py              konsole, komandas, auto-saglabāšana
   config.py           vides mainīgie, limiti, PVN likme
-  report.py           atbildes sadalīšana, HTML e-pastam, attēlu pārbaude
+  fences.py           rāmju birkas svešam tekstam; paziņojumi promptam
+  mcp_server.py       kataloga rīki Claude Code sesijai (MCP, stdio)
+  claude_code.py      prasme, atvasināta no sistēmas prompta
+  report.py           atbildes sadalīšana, HTML, attēlu/saišu/izcelsmes pārbaude
+  vendor/             ievests svešs kods; NEPĀRRAKSTĀM (skat. vendor/README.md)
   agent/
     prompts.py        sistēmas prompts (nozares zināšanas + atbildes formāts)
     tools.py          rīku definīcijas un izpilde
@@ -240,6 +375,7 @@ src/esupplier/
     run.py            pastkastītes gājiens: vēstule → melnraksts
     imap.py           savienojums, mapes, APPEND
     message.py        MIME → teksts; citāti, paraksti, filtri
+    attachments.py    pielikums → teksts (PDF, Word, Excel, CSV)
     draft.py          vēstule → MIME melnraksts ar ķēdes galvenēm
   catalog/
     sync.py           Store API / scrape → SQLite
@@ -252,6 +388,8 @@ src/esupplier/
 data/catalog.db       kataloga kopija (sinhronizēta, nav repozitorijā)
 data/units.csv        mērvienību izņēmumi (repozitorijā)
 atbildes/*.html       sagatavotās vēstules
+.mcp.json             MCP pieslēgums Claude Code sesijai
+.claude/skills/       prasme (ģenerēta ar `uv run skill`, repozitorijā ir)
 ```
 
 ## Vides mainīgie
@@ -271,6 +409,10 @@ atbildes/*.html       sagatavotās vēstules
 | `ESUPPLIER_IMAP_DRAFTS` | — | melnrakstu mape; tukšs = atrodam paši |
 | `ESUPPLIER_MAIL_BATCH` | `10` | cik vēstules vienā gājienā |
 | `ESUPPLIER_MAIL_POLL` | `60` | pauze sekundēs starp pārbaudēm |
+| `ESUPPLIER_ATTACHMENT_MAX_BYTES` | `10000000` | lielāku pielikumu neatveram |
+| `ESUPPLIER_ATTACHMENT_CHARS` | `4000` | cik zīmju no viena pielikuma aiziet modelim |
+| `ESUPPLIER_ATTACHMENTS_CHARS` | `12000` | cik zīmju kopā no visiem pielikumiem |
+| `ESUPPLIER_ATTACHMENT_PDF_PAGES` | `20` | cik PDF lapu lasām |
 
 ## Zināmās robežas
 
@@ -286,3 +428,12 @@ atbildes/*.html       sagatavotās vēstules
   pareizais.
 - Cenas `config.PRICING` sarakstā ir tikai Anthropic modeļiem; citiem eval izvadē
   izmaksas rāda `n/a`, nevis izdomātu skaitli.
+- **Izcelsmes pārbaude ir pēc fakta, ne vārti.** Vēstule jau ir uzrakstīta, kad
+  to pārbauda; aizturēt to nevar, var tikai pateikt menedžerim. Sagatavotais
+  melnraksts paliek pastkastītē arī tad, kad brīdinājums iedegās.
+- **Cenu pārbaude nav stingra.** Tā pieņem visu, kas no kataloga cenas izriet ar
+  reizināšanu vai saskaitīšanu, tāpēc izdomāta cena, kas nejauši sakrīt ar kādu
+  no tiem skaitļiem, tiek palaista cauri. Artikulu pārbaude ir stingra.
+- **Konsolē klienta vēstule rāmī neiet.** Tur ievadi raksta menedžeris, un tā ir
+  gan pielīmēta klienta vēstule, gan norādījumi aģentam ("uzraksti īsāk"). Rāmis
+  padarītu par datiem arī tos. Pastkastītes ceļā šī neskaidrība nepastāv.

@@ -281,6 +281,37 @@ def main(argv: list[str] | None = None) -> int:
                     f"[yellow]! Vēstulē klientam ir mūsu iekšējā adrese — "
                     f"izņem pirms sūtīšanas: {leak}[/yellow]"
                 )
+            # Artikuls vai cena, ko neviens rīks neatdeva. Promptā aizliegums ir
+            # no paša sākuma; šī ir pirmā vieta, kur to kāds tiešām salīdzina.
+            seen = report.tool_provenance(result.tool_calls)
+            letter_part, _ = report.split_answer(result.text)
+            for sku in report.unbacked_skus(letter_part, seen.skus):
+                console.print(
+                    f"[yellow]! Artikuls {sku} nenāk no rīka atbildes — "
+                    f"pārbaudi katalogā.[/yellow]"
+                )
+            for price in report.unbacked_prices(letter_part, seen.prices):
+                console.print(
+                    f"[yellow]! Cena {price} € nav no kataloga un no tā "
+                    f"neizriet — pārbaudi.[/yellow]"
+                )
+            # Atlikuma skaitli modelis neredz, tāpēc katrs tāds vēstulē ir
+            # izdomāts — un klientam tas kļūst par solījumu.
+            for line in report.stock_leaks(letter_part):
+                console.print(
+                    f"[yellow]! Vēstulē ir atlikuma skaitlis vai vārds — "
+                    f"izņem: {line}[/yellow]"
+                )
+            _, bad_links = report.verify_links(
+                letter_part, report.known_product_urls(conn)
+            )
+            for url in bad_links:
+                console.print(
+                    f"[yellow]! Saite nav katalogā — pārbaudi: {url}[/yellow]"
+                )
+            # Atlikums menedžerim. Vēstulē tā nav un nedrīkst būt.
+            for note in report.stock_notes(conn, report.cited_skus(letter_part)):
+                console.print(f"   [cyan]{note}[/cyan]")
             if result.truncated:
                 console.print(
                     "[red]! Atbilde tika apcirsta pusvārdā — beigas (arī "

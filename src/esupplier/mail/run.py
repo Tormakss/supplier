@@ -51,18 +51,30 @@ class Outcome:
     warnings: list[str] = field(default_factory=list)
 
 
-def _augment_internal(internal: str, warnings: list[str]) -> str:
+def _augment_internal(internal: str, warnings: list[str], notes: list[str]) -> str:
     """Pieliek iekšējam blokam to, ko konsolē būtu pateikusi programma.
 
-    Izmestas bildes, iekšējās adreses noplūde, sasniegts rīku limits — konsolē
-    par to brīdina programma. `--watch` režīmā konsolē neviens neskatās, tāpēc
-    brīdinājumam jāpaliek arī failā blakus vēstulei.
+    Izmestas bildes un saites, iekšējās adreses noplūde, sasniegts rīku limits —
+    konsolē par to brīdina programma. `--watch` režīmā konsolē neviens
+    neskatās, tāpēc brīdinājumam jāpaliek arī failā blakus vēstulei.
+
+    `notes` ir atlikums. Tas nav brīdinājums, bet skaitlis, ko modelis NEREDZ
+    un tāpēc nevar ne pateikt klientam, ne uzrakstīt šeit. Menedžerim tas
+    vajadzīgs katrā vēstulē, ne tikai tad, kad kaut kas nogāja greizi.
     """
-    if not warnings:
-        return internal
-    block = "\n".join(f"- {w}" for w in warnings)
-    head = "**⚑ AUTOMĀTISKĀS PĀRBAUDES**\n" + block
-    return f"{head}\n\n{internal}".strip() if internal.strip() else head
+    blocks = []
+    if warnings:
+        blocks.append(
+            "**⚑ AUTOMĀTISKĀS PĀRBAUDES**\n" + "\n".join(f"- {w}" for w in warnings)
+        )
+    if notes:
+        blocks.append(
+            "**ATLIKUMS NOLIKTAVĀ (klientam nesūtīt)**\n"
+            + "\n".join(f"- {n}" for n in notes)
+        )
+    if internal.strip():
+        blocks.append(internal.strip())
+    return "\n\n".join(blocks)
 
 
 def process_one(
@@ -104,23 +116,64 @@ def process_one(
             f"{len(dropped)} attēls(i) nebija katalogā un tika izmesti — "
             "pārbaudi bildes pirms sūtīšanas."
         )
+    letter, bad_links = report.verify_links(letter, report.known_product_urls(conn))
+    if bad_links:
+        warnings.append(
+            f"{len(bad_links)} saite(s) nebija katalogā un tika izmestas: "
+            + ", ".join(bad_links)
+            + ". Saiti uz preci pieliec ar roku."
+        )
+    for line in report.stock_leaks(letter):
+        # Modelis atlikuma skaitli neredz, tāpēc katrs tāds skaitlis vēstulē ir
+        # izdomāts. Klientam tas kļūst par solījumu.
+        warnings.append(f"Vēstulē ir atlikuma skaitlis vai vārds, izņem to: {line}")
     leaks = report.contact_leaks(letter)
     for leak in leaks:
         warnings.append(f"Vēstulē palika mūsu iekšējā adrese, izņem to: {leak}")
+
+    # Izcelsmes pārbaude: vēstulē drīkst būt tikai tas, ko rīks ŠAJĀ gājienā
+    # tiešām atdeva. Promptā tas ir pirmais noteikums, bet prompts nav pārbaude.
+    seen = report.tool_provenance(result.tool_calls)
+    invented_skus = report.unbacked_skus(letter, seen.skus)
+    if invented_skus:
+        warnings.append(
+            "Vēstulē ir artikuls, ko neviens rīks neatdeva: "
+            + ", ".join(invented_skus)
+            + ". Pārbaudi katalogā pirms sūtīšanas."
+        )
+    invented_prices = report.unbacked_prices(letter, seen.prices)
+    if invented_prices:
+        warnings.append(
+            "Vēstulē ir cena, kas nav no kataloga un no tā neizriet: "
+            + ", ".join(f"{price} €" for price in invented_prices)
+            + ". Pārbaudi pirms sūtīšanas."
+        )
     if not internal.strip():
         warnings.append(
             "Modelis iekšējo bloku NEUZRAKSTĪJA. Tas nenozīmē, ka nekas nav "
             "jādara — pārbaudi rezervāciju, termiņu un rēķinu ar roku."
         )
-    if incoming.attachments:
+    read = [item for item in incoming.attachments if item.read]
+    if read:
+        # Izvilkums nav oriģināls: tabulas aile, izmēra atzīme vai rasējuma
+        # bilde tajā var nebūt. Menedžerim jāzina, ka piedāvājuma daļa nāk no
+        # faila, ko pats vēl nav atvēris.
         warnings.append(
-            "Vēstulei ir pielikumi, kurus aģents nelasa: "
-            + ", ".join(incoming.attachments)
+            "Pielikumu saturs nolasīts automātiski un aizgāja modelim: "
+            + ", ".join(item.name for item in read)
+            + ". Pārbaudi, vai piedāvājumā nav pazudusi neviena pozīcija."
+        )
+    for item in incoming.unread_attachments:
+        warnings.append(
+            f"Pielikumu `{item.name}` aģents neizlasīja"
+            + (f" ({item.note})" if item.note else "")
+            + " — atver pats."
         )
     if result.hit_iteration_limit:
         warnings.append("Sasniegts rīku izsaukumu limits — atbilde var būt nepilnīga.")
 
-    internal = _augment_internal(internal, warnings)
+    notes = report.stock_notes(conn, report.cited_skus(letter))
+    internal = _augment_internal(internal, warnings, notes)
 
     answer_path = ""
     internal_path = ""
@@ -167,7 +220,7 @@ def skip_reason_for(incoming: Incoming) -> str:
     Galvenes pārbaudi veic `message.skip_reason`; šeit paliek tas, ko var
     pateikt bez MIME objekta.
     """
-    if not incoming.body.strip():
+    if not incoming.body.strip() and not any(i.read for i in incoming.attachments):
         return "tukšs ķermenis"
     if not incoming.recipient:
         return "nav adreses, uz kuru atbildēt"
@@ -225,7 +278,12 @@ def run_once(
             # Galvenes filtru palaižam uz MIME objekta, jo `List-Id` un
             # `Auto-Submitted` izparsētajā `Incoming` vairs nav.
             mime = BytesParser(policy=policy.default).parsebytes(raw)
-            header_reason = skip_reason(mime, incoming.body, own_address=IMAP_USER)
+            header_reason = skip_reason(
+                mime,
+                incoming.body,
+                own_address=IMAP_USER,
+                has_attachment_text=any(i.read for i in incoming.attachments),
+            )
             if header_reason:
                 outcome = Outcome(incoming, "skipped", header_reason)
             else:
@@ -300,6 +358,27 @@ def _wait(console: Console, delay: int, totals: dict[str, int]) -> None:
         time.sleep(delay)
 
 
+def _unmark_all(console: Console, rows: list[Any], *, folder: str = "") -> None:
+    """Noņem mūsu atslēgvārdu, lai `search_new` vēstules atkal atdod.
+
+    Bez šī `--redo` klusi neko nedarītu: SQLite ieraksts ir izmests, bet
+    pastkastītē vēstulei joprojām stāv `$AiDrafted`, un meklēšana to neatgriež.
+    """
+    uids = [row["uid"] for row in rows if row["uid"]]
+    if not uids:
+        return
+    box = Mailbox(folder=folder)
+    try:
+        box.connect()
+        box.select()
+        for uid in uids:
+            box.unmark(uid)
+    except MailError as exc:
+        console.print(f"[yellow]! Atslēgvārdu noņemt neizdevās: {exc}[/yellow]")
+    finally:
+        box.close()
+
+
 def _print_log(console: Console, conn: sqlite3.Connection, limit: int) -> None:
     rows = db.processed_log(conn, limit)
     if not rows:
@@ -342,6 +421,12 @@ def main(argv: list[str] | None = None) -> int:
         "--retry-failed", action="store_true", help="atkārto vēstules, kas iepriekš krita"
     )
     parser.add_argument(
+        "--redo",
+        type=int,
+        metavar="N",
+        help="atbild vēlreiz uz N pēdējām apstrādātajām vēstulēm (arī tām, kas izdevās)",
+    )
+    parser.add_argument(
         "--log", nargs="?", type=int, const=20, help="parāda apstrādes žurnālu un iziet"
     )
     args = parser.parse_args(argv)
@@ -356,6 +441,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.retry_failed:
             forgotten = db.forget_failed(conn)
             console.print(f"[dim]Aizmirstas {forgotten} kritušās vēstules.[/dim]")
+
+        if args.redo:
+            # Vecais melnraksts pastkastītē PALIEK. Izmest to nozīmētu dzēst
+            # cilvēka mapē kaut ko, ko viņš varbūt jau labojis; divi melnraksti
+            # blakus ir mazākais no ļaunumiem.
+            rows = db.forget_recent(conn, args.redo)
+            if not rows:
+                console.print("[dim]Žurnālā nav, ko atkārtot.[/dim]")
+                return 0
+            for row in rows:
+                console.print(
+                    f"[dim]Atkārtoju: {row['sender']} — "
+                    f"{row['subject'] or '(bez temata)'}[/dim]"
+                )
+            _unmark_all(console, rows, folder=args.folder)
+            console.print(
+                "[dim]Iepriekšējie melnraksti paliek mapē Drafts — "
+                "izdzēs tos ar roku.[/dim]"
+            )
+            args.once = True
 
         stats = catalog_stats(conn=conn)
         if not stats["total"]:

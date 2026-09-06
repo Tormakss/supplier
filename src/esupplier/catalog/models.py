@@ -118,6 +118,13 @@ class Product:
         Apzināti šaurs: aprakstu šeit NAV nekad (Camlock produktiem tie ir
         identiski ~900 zīmju bloki, kas noēd kontekstu), un tehniskie lauki,
         kas vajadzīgi retāk, nāk tikai caur `get_product`.
+
+        ATLIKUMA SKAITĻA (`stock_qty`, `stock_text`) šeit NAV, un tas ir
+        apzināti. Klientam pieejamība ir "ir" vai "nav"; precīzs atlikums ir
+        mūsu iekšējais skaitlis, un tas mainās ātrāk, nekā vēstule aiziet.
+        Kamēr modelis to redzēja, tas godprātīgi rakstīja "pieejami 19 metri"
+        vēstulē, ko menedžeris sūta tālāk. Skaitli iekšējā blokā pieliek
+        programma (`report.stock_notes`) — tur tas klientam netiek nekad.
         """
         out = {
             "sku": self.sku,
@@ -147,8 +154,6 @@ class Product:
             out["color"] = self.color
         if self.hardness_sha is not None:
             out["hardness_sha"] = self.hardness_sha
-        if self.stock_qty is not None:
-            out["stock_qty"] = self.stock_qty
         if self.dn_mm_2 is not None:
             out["dn_mm_2"] = self.dn_mm_2
         if self.type_code:

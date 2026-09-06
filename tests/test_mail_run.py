@@ -6,6 +6,7 @@ cilvēka: uz ko atbildam, uz ko ne, un kad melnraksts netiek taisīts vispār.
 
 from __future__ import annotations
 
+import json
 import pathlib
 from dataclasses import replace
 from email.message import EmailMessage
@@ -14,8 +15,10 @@ import pytest
 
 from esupplier import report
 from esupplier.agent.loop import AgentResult
+from esupplier.agent.tools import ToolCall
 from esupplier.catalog import db
 from esupplier.mail import run as mail_run
+from esupplier.mail.attachments import Attachment
 from esupplier.mail.message import Incoming, parse_message
 
 ANSWER = """\
@@ -195,12 +198,128 @@ def test_missing_internal_block_becomes_a_visible_warning(conn, monkeypatch) -> 
     assert "NEUZRAKSTĪJA" in outcome.internal
 
 
-def test_attachments_are_flagged_to_the_manager(conn, monkeypatch) -> None:
+def test_unread_attachments_are_flagged_to_the_manager(conn, monkeypatch) -> None:
     monkeypatch.setattr(mail_run, "run_turn", fake_turn())
-    incoming = replace(CLIENT, attachments=["rasejums.pdf"])
+    unread = Attachment(name="rasejums.dwg", note="AutoCAD rasējums — jāatver ar roku")
+    incoming = replace(CLIENT, attachments=[unread])
+    outcome = mail_run.process_one(incoming, conn, client=None, box=FakeBox({}))
+
+    assert any("rasejums.dwg" in w and "neizlasīja" in w for w in outcome.warnings)
+    assert "rasejums.dwg" in outcome.internal
+
+
+def test_read_attachments_are_flagged_too(conn, monkeypatch) -> None:
+    """Izvilkums nav oriģināls. Menedžerim jāzina, ka daļa piedāvājuma nāk no
+    faila, ko viņš pats vēl nav atvēris."""
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn())
+    read = Attachment(name="spec.xlsx", text="EPDM D12 | 358")
+    incoming = replace(CLIENT, attachments=[read])
+    outcome = mail_run.process_one(incoming, conn, client=None, box=FakeBox({}))
+
+    assert any("spec.xlsx" in w and "nolasīts" in w for w in outcome.warnings)
+    assert not any("neizlasīja" in w for w in outcome.warnings)
+
+
+def test_invented_sku_and_price_reach_the_manager(conn, monkeypatch) -> None:
+    """Promptā aizliegums nosaukt neredzētu preci ir pirmais noteikums. Šī ir
+    vieta, kur to kāds tiešām salīdzina ar rīka atbildi."""
+    call = ToolCall(
+        name="search_products",
+        input={},
+        result_count=1,
+        output=json.dumps(
+            {"products": [{"sku": "000013357", "price_eur_excl_vat": 47.38}]}
+        ),
+    )
+    answer = (
+        "Labdien!\n\n| 000099999 | Blīvaukla | 12.50 € bez PVN / m |\n\n"
+        "---\n⚑ IEKŠĒJI\nNekas."
+    )
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn(answer, tool_calls=[call]))
+    outcome = mail_run.process_one(CLIENT, conn, client=None, box=FakeBox({}))
+
+    assert any("000099999" in w for w in outcome.warnings)
+    assert any("12.50" in w for w in outcome.warnings)
+    assert "000099999" in outcome.internal
+
+
+def test_clean_answer_raises_no_provenance_warning(conn, monkeypatch) -> None:
+    call = ToolCall(
+        name="search_products",
+        input={},
+        result_count=1,
+        output=json.dumps(
+            {"products": [{"sku": "000013357", "price_eur_excl_vat": 47.38}]}
+        ),
+    )
+    answer = (
+        "Labdien!\n\n| 000013357 | EPDM D12 | 47.38 € bez PVN / m |\n"
+        "10 m × 47.38 € = 473.80 €\n\n---\n⚑ IEKŠĒJI\nNekas."
+    )
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn(answer, tool_calls=[call]))
+    outcome = mail_run.process_one(CLIENT, conn, client=None, box=FakeBox({}))
+    assert not any("neatdeva" in w or "neizriet" in w for w in outcome.warnings)
+
+
+def test_stock_number_reaches_the_manager_but_not_the_client(conn, monkeypatch) -> None:
+    """Atlikums modelim nav dots vispār. Menedžerim to pieliek programma, un
+    melnrakstā, ko viņš sūta tālāk, tā nav."""
+    from esupplier.catalog.models import Product
+
+    db.upsert_products(
+        conn,
+        [
+            Product(
+                id=1,
+                sku="000015202",
+                name="Camlock blīve DN38 EPDM",
+                permalink="https://etms.lv/produkts/camlock-seal-dn38-epdm/",
+                price_excl_vat=1.23,
+                unit="gab",
+                is_in_stock=True,
+                stock_qty=121,
+            )
+        ],
+    )
+    answer = (
+        "Labdien!\n\n| 000015202 | Camlock blīve | Ir | "
+        "[Skatīt](https://etms.lv/produkts/camlock-seal-dn38-epdm/) |\n\n"
+        "---\n⚑ IEKŠĒJI\n- Pārbaudīt atlikumu."
+    )
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn(answer))
     box = FakeBox({})
-    outcome = mail_run.process_one(incoming, conn, client=None, box=box)
-    assert any("rasejums.pdf" in w for w in outcome.warnings)
+    outcome = mail_run.process_one(CLIENT, conn, client=None, box=box)
+
+    assert "noliktavā 121 gab." in outcome.internal
+    plain = box.appended[0].get_body(preferencelist=("plain",)).get_content()
+    assert "121" not in plain
+
+
+def test_invented_link_is_dropped_from_the_draft(conn, monkeypatch) -> None:
+    from esupplier.catalog.models import Product
+
+    db.upsert_products(
+        conn,
+        [Product(id=1, sku="000015202", name="Blīve", permalink="https://etms.lv/produkts/x/")],
+    )
+    answer = (
+        "Labdien!\n\n| 000015202 | Blīve | [Skatīt](https://etms.lv/produkts/000015202/) |"
+        "\n\n---\n⚑ IEKŠĒJI\n- nav"
+    )
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn(answer))
+    box = FakeBox({})
+    outcome = mail_run.process_one(CLIENT, conn, client=None, box=box)
+
+    assert any("saite" in w.lower() for w in outcome.warnings)
+    plain = box.appended[0].get_body(preferencelist=("plain",)).get_content()
+    assert "produkts/000015202" not in plain
+
+
+def test_stock_number_in_the_letter_is_flagged(conn, monkeypatch) -> None:
+    answer = "Labdien!\n\nNoliktavā ir 19 metri.\n\n---\n⚑ IEKŠĒJI\n- nav"
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn(answer))
+    outcome = mail_run.process_one(CLIENT, conn, client=None, box=FakeBox({}))
+    assert any("atlikuma skaitlis" in w for w in outcome.warnings)
 
 
 def test_tool_limit_is_flagged(conn, monkeypatch) -> None:

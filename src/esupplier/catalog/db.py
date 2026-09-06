@@ -296,6 +296,26 @@ def forget_failed(conn: sqlite3.Connection) -> int:
     return cur.rowcount
 
 
+def forget_recent(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    """Izmet N pēdējos ierakstus un atgriež tos, ko izmeta.
+
+    Vajadzīgs pēc prompta izmaiņas: vecā atbilde tapa pēc veciem noteikumiem,
+    un vienīgais veids pārbaudīt jaunos ir palaist to pašu vēstuli vēlreiz.
+
+    Atgriežam rindas, ne skaitli, jo `uid` no tām vajag IMAP pusē: SQLite
+    ieraksta izmešana vēstuli neatgriež gājienā, kamēr pastkastītē tai stāv
+    mūsu atslēgvārds.
+    """
+    rows = processed_log(conn, limit)
+    if not rows:
+        return []
+    ids = [row["message_id"] for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(f"DELETE FROM processed_messages WHERE message_id IN ({placeholders})", ids)
+    conn.commit()
+    return rows
+
+
 def processed_log(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
     return list(
         conn.execute(

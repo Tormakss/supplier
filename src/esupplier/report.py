@@ -9,14 +9,19 @@ neuzmanīga Ctrl+A, un klients izlasa, ko mēs par viņa pieprasījumu nezinām.
 from __future__ import annotations
 
 import html
+import itertools
+import json
 import re
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Iterable
 
 from markdown_it import MarkdownIt
 
-from .config import ANSWERS_DIR, CONTACT_EMAIL, SITE_URL
+from .catalog import units
+from .config import ANSWERS_DIR, CONTACT_EMAIL, SITE_URL, VAT_RATE
 
 #: Virsraksts, ar ko sākas iekšējā daļa. Karogs ir primārais marķieris —
 #: vārds "IEKŠĒJI" mainās līdz ar valodu, kurā menedžeris jautāja.
@@ -94,6 +99,265 @@ def verify_images(text: str, known: set[str] | None) -> tuple[str, list[str]]:
         return "—"
 
     return _IMAGE.sub(replace, text), dropped
+
+
+#: Markdown saite, kas NAV attēls. `(?<!!)` tur nost `![alt](url)` — tos
+#: pārbauda `verify_images`, un divkārša pārbaude vienu un to pašu izmestu divreiz.
+_LINK = re.compile(r"(?<!!)\[([^\]]*)\]\(\s*(\S+?)\s*\)")
+#: Atlikuma skaitlis vēstulē. Modelis to vairs neredz (`to_search_dict`), tāpēc
+#: katrs šāds skaitlis ir izdomāts — un tieši tāds klientam ir bīstamākais.
+_STOCK_LEAK = (
+    re.compile(r"noliktavā\s+(?:ir\s+|pieejam\w+\s+)?\d", re.IGNORECASE),
+    re.compile(r"\d\s*(?:gab\.?|m²|m)\s+noliktavā", re.IGNORECASE),
+    re.compile(r"\b(atlikum\w*|krājum\w*)\b", re.IGNORECASE),
+)
+
+
+def known_product_urls(conn: sqlite3.Connection) -> set[str]:
+    """Visas kataloga produktu lapas — pret tām pārbaudām saites vēstulē."""
+    rows = conn.execute(
+        "SELECT DISTINCT permalink FROM products WHERE permalink IS NOT NULL AND permalink != ''"
+    )
+    return {row[0] for row in rows}
+
+
+def verify_links(text: str, known: set[str] | None) -> tuple[str, list[str]]:
+    """Izmet saites, kuru nav katalogā. Atgriež (teksts, izmesto URL saraksts).
+
+    Tas pats iemesls, kas bildēm: saite uz nepareizu preci ir sliktāka par
+    saites trūkumu, un adresi, kas salikta no artikula, klients atver un
+    ierauga 404. Tukšs `known` (nesinhronizēts katalogs) pārbaudi izslēdz.
+    """
+    if not known:
+        return text, []
+
+    dropped: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        url = match.group(2)
+        if url in known:
+            return match.group(0)
+        dropped.append(url)
+        return "—"
+
+    return _LINK.sub(replace, text), dropped
+
+
+def stock_leaks(text: str) -> list[str]:
+    """Rindas, kurās vēstulē parādījies atlikuma skaitlis vai vārds.
+
+    Klientam pieejamība ir "ir" vai "nav". Precīzs atlikums mainās ātrāk, nekā
+    vēstule aiziet, un skaitlis, ko klients izlasīja, kļūst par solījumu.
+    """
+    letter, _internal = split_answer(text)
+    found: list[str] = []
+    for line in letter.splitlines():
+        if any(pattern.search(line) for pattern in _STOCK_LEAK):
+            found.append(line.strip())
+    return found
+
+
+def stock_notes(conn: sqlite3.Connection, skus: list[str]) -> list[str]:
+    """Atlikums menedžerim — pa vienai rindai uz artikulu.
+
+    Skaitli pieliek PROGRAMMA, ne modelis. Modelim tā nav vispār, tāpēc
+    klientam tas nevar nonākt pat kļūdas ceļā; menedžerim tas ir vajadzīgs,
+    lai izlemtu par rezervāciju, un šeit tas ir vienmēr, ne tikai tad, kad
+    modelis atcerējās pajautāt.
+    """
+    if not skus:
+        return []
+    placeholders = ",".join("?" for _ in skus)
+    rows = conn.execute(
+        f"SELECT sku, is_in_stock, stock_qty, unit FROM products WHERE sku IN ({placeholders})",
+        skus,
+    ).fetchall()
+    by_sku = {row["sku"]: row for row in rows}
+
+    notes: list[str] = []
+    for sku in skus:
+        row = by_sku.get(sku)
+        if row is None:
+            continue
+        label = units.LABELS.get(row["unit"], row["unit"])
+        if row["stock_qty"] is not None:
+            notes.append(f"art. {sku} — noliktavā {row['stock_qty']} {label}")
+        elif row["is_in_stock"]:
+            notes.append(f"art. {sku} — noliktavā ir, precīzs skaits katalogā nav")
+        else:
+            notes.append(f"art. {sku} — noliktavā NAV")
+    return notes
+
+
+# --- izcelsme --------------------------------------------------------------
+# Anthropic `commerce-agents` pieraksts: rakstīšana pieņem TIKAI tos
+# identifikatorus, ko šajā sesijā atgrieza rīks. Viņiem tie ir vārti pirms
+# groza; mums rakstīšana ir pati vēstule, un aizturēt to nevar — tā jau ir
+# uzrakstīta. Tāpēc pārbaudām pēc fakta un sakām menedžerim.
+#
+# Promptā noteikums ir no paša sākuma ("Atbildi TIKAI par produktiem, ko
+# atgriež search_products"). Prompts nav pārbaude: līdz šim vienīgais, ko
+# kāds tiešām salīdzināja ar katalogu, bija bildes.
+
+#: Artikuls katalogā ir cipari ar vadošajām nullēm ("000013357"). Seši cipari
+#: ir apakšējā robeža — zem tās sākas daudzumi, gadi un izmēri.
+_SKU = re.compile(r"\b\d{6,12}\b")
+#: Naudas summa: divas zīmes aiz komata un `€` vai `EUR` blakus. Bez valūtas
+#: zīmes "12,50" var būt izmērs, un tad katra vēstule izskatītos aizdomīga.
+#:
+#: Atstarpe kā tūkstošu atdalītājs derīga TIKAI pa trim cipariem. Ar brīvu
+#: ciparu un atstarpju virkni "Poz.1 000013357 47.38 €" tika nolasīts kā viena
+#: summa, un artikuls pazuda skaitļa iekšienē.
+_MONEY = re.compile(
+    r"(?<![\d.,])(\d{1,3}(?:[ \u00a0]\d{3})+[.,]\d{2}|\d+[.,]\d{2})\s*(?:€|EUR\b)"
+)
+#: Jebkurš skaitlis vēstulē. Tie ir daudzumi, ar kuriem modelis reizina cenu.
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+#: Cik daudzumu ņemam vērā. Reizinājumu kopa aug ar katru, un vēstulē ar
+#: divdesmit skaitļiem tā vairs neko nepasaka.
+_MAX_MULTIPLIERS = 25
+#: Cik pozīciju summu vēl uzskatām par kopsummu.
+_MAX_SUM_TERMS = 6
+
+
+@dataclass(slots=True)
+class Provenance:
+    """Ko rīki tiešām atdeva šajā gājienā."""
+
+    skus: set[str] = field(default_factory=set)
+    #: Cenas centos. Veseli skaitļi tāpēc, ka 47.38 * 358 peldošajā komatā
+    #: nesakrīt ar to pašu summu, ko izrēķināja modelis.
+    prices: set[int] = field(default_factory=set)
+
+    def __bool__(self) -> bool:
+        return bool(self.skus or self.prices)
+
+
+def _cents(value: float) -> int:
+    return int(round(float(value) * 100))
+
+
+def _to_cents(text: str) -> int | None:
+    cleaned = text.replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    try:
+        return _cents(float(cleaned))
+    except ValueError:
+        return None
+
+
+def _collect(node: Any, found: Provenance) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "sku" and isinstance(value, str) and value.strip():
+                found.skus.add(value.strip())
+            elif key.startswith("price_eur") and isinstance(value, (int, float)):
+                found.prices.add(_cents(value))
+            else:
+                _collect(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _collect(item, found)
+
+
+def tool_provenance(tool_calls: Iterable[Any]) -> Provenance:
+    """Artikuli un cenas, ko rīki atgrieza šajā gājienā.
+
+    Lasām rīka atbildi, ne katalogu: pārbaudes jēga ir tieši tāda, ka vēstulē
+    drīkst būt tikai tas, ko modelis TIEŠĀM redzēja. Katalogā esošs, bet
+    neizsaukts artikuls ir tikpat izdomāts kā jebkurš cits.
+    """
+    found = Provenance()
+    for call in tool_calls:
+        if getattr(call, "is_error", False) or not getattr(call, "output", ""):
+            continue
+        try:
+            _collect(json.loads(call.output), found)
+        except (ValueError, TypeError):
+            continue
+    return found
+
+
+def cited_skus(letter: str) -> list[str]:
+    """Artikuli, ko vēstule nosauc — parādīšanās secībā, bez atkārtojumiem."""
+    seen: list[str] = []
+    for sku in _SKU.findall(letter):
+        if sku not in seen:
+            seen.append(sku)
+    return seen
+
+
+def unbacked_skus(letter: str, seen: set[str]) -> list[str]:
+    """Artikuli vēstulē, kurus neviens rīks neatdeva."""
+    if not seen:
+        return []
+    return sorted({sku for sku in _SKU.findall(letter) if sku not in seen})
+
+
+def _derived_prices(seen: set[int], multipliers: set[float]) -> set[int]:
+    """Cenas, kas no kataloga cenām izriet ar reizināšanu.
+
+    Divi soļi, ne vairāk. Pirmais dod pozīcijas summu (cena * daudzums), otrais
+    to pašu ar PVN — tieši tā, kā prompts liek rēķināt. Trešais solis vairs
+    neko nepaskaidrotu, tikai padarītu kopu tik platu, ka tajā trāpa jebkas.
+    """
+    with_vat = 1.0 + VAT_RATE
+    products = {int(round(price * factor)) for price in seen for factor in multipliers}
+    return seen | products | {int(round(price * with_vat)) for price in products}
+
+
+def _sums(values: list[int]) -> set[int]:
+    """Kopsummas no jau atzītajām summām."""
+    totals: set[int] = set()
+    pool = values[:12]
+    for size in range(2, min(_MAX_SUM_TERMS, len(pool)) + 1):
+        for combo in itertools.combinations(pool, size):
+            totals.add(sum(combo))
+    return totals
+
+
+def unbacked_prices(letter: str, seen: set[int]) -> list[str]:
+    """Cenas vēstulē, kas nav ne katalogā, ne izrēķināmas no tā, kas tur ir.
+
+    Pieņemam plaši un apzināti: kataloga cena, tā reizināta ar jebkuru vēstulē
+    minētu skaitli, tas pats ar PVN, un vairāku šādu summu kopsumma. Kļūda uz
+    "atzīstam" pusi maksā palaistu garām skaitli; kļūda uz otru pusi maksā
+    brīdinājumu pie katras vēstules, un tādus pēc nedēļas vairs neviens nelasa.
+    """
+    if not seen:
+        return []
+    figures = [(raw, _to_cents(raw)) for raw in _MONEY.findall(letter)]
+    figures = [(raw, value) for raw, value in figures if value is not None]
+    if not figures:
+        return []
+
+    multipliers: set[float] = set()
+    for raw in _NUMBER.findall(letter):
+        try:
+            number = float(raw.replace(",", "."))
+        except ValueError:
+            continue
+        if 0 < number and len(multipliers) < _MAX_MULTIPLIERS:
+            multipliers.add(number)
+    multipliers.add(1.0)
+
+    derived = _derived_prices(seen, multipliers)
+
+    def known(value: int, pool: set[int]) -> bool:
+        # Centa pielaide: modelis noapaļo pozīcijas summu, mēs rēķinām no cenas.
+        return any(abs(value - candidate) <= 1 for candidate in pool)
+
+    accepted = [value for _, value in figures if known(value, derived)]
+    # Kopsumma ar PVN ir kopsumma bez PVN reizināta ar likmi, un kopsumma pati
+    # nav nevienas kataloga cenas reizinājums — tāpēc PVN solis jāatkārto arī te.
+    totals = _sums(accepted)
+    totals |= {int(round(total * (1.0 + VAT_RATE))) for total in totals}
+    return sorted(
+        {
+            raw
+            for raw, value in figures
+            if not known(value, derived) and not known(value, totals)
+        }
+    )
 
 
 def for_console(text: str) -> str:

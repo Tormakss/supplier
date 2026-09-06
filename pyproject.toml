@@ -10,7 +10,9 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "markdown-it-py>=3.0.0",
+    "mcp>=2.1.1",
     "openai>=2.53.0",
+    "pypdf>=6.17.0",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
 ]
@@ -19,6 +21,8 @@ dependencies = [
 sync = "esupplier.catalog.sync:main"
 chat = "esupplier.cli:main"
 mail = "esupplier.mail.run:main"
+mcp-katalogs = "esupplier.mcp_server:main"
+skill = "esupplier.claude_code:main"
 evals = "esupplier.evals.run:main"
 
 [build-system]

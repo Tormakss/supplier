@@ -186,6 +186,19 @@ class Mailbox:
             return result[:limit] if limit else result
         raise MailError("IMAP meklēšana neizdevās visos veidos.")
 
+    def unmark(self, uid: str, keyword: str = "") -> bool:
+        """Noņem atslēgvārdu, lai vēstule atkal iekrīt `search_new` tvērienā.
+
+        Neveiksme nav kļūda tā paša iemesla dēļ, kas `mark`: ne katrs serveris
+        atļauj lietotāja atslēgvārdus, un dublēšanos tāpat notur SQLite žurnāls.
+        """
+        keyword = keyword or IMAP_KEYWORD
+        try:
+            status, _ = self.conn.uid("STORE", uid, "-FLAGS", f"({keyword})")
+        except imaplib.IMAP4.error:
+            return False
+        return status == "OK"
+
     def fetch(self, uid: str) -> bytes:
         status, data = self.conn.uid("FETCH", uid, "(BODY.PEEK[])")
         self._ok(status, data, f"Vēstules {uid} lasīšana")

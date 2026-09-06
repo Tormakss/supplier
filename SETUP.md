@@ -65,6 +65,12 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 | `ESUPPLIER_EFFORT` | `medium` | `minimal` ir lētāk, bet retāk ķeras pie rīkiem |
 | `ESUPPLIER_DB` | `data/catalog.db` | cits kataloga ceļš |
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt sagatavotās vēstules |
+| `ESUPPLIER_ATTACHMENT_CHARS` | `4000` | cik zīmju no viena pielikuma aiziet modelim |
+| `ESUPPLIER_ATTACHMENTS_CHARS` | `12000` | cik zīmju kopā no visiem pielikumiem |
+
+Pielikumu saturs un klienta vēstule modelim aiziet iežogoti, un artikulus
+ar cenām pirms melnraksta salīdzina ar rīku atbildēm. Abu apraksts ir
+README sadaļā "Svešs teksts un izcelsme".
 
 Ja gribi, lai aģents lasa pastu pats (`uv run mail`, skat. 6.a sadaļu), vajag
 vēl trīs:

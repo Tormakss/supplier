@@ -1,0 +1,12 @@
+e-supplier agent
+Copyright 2026 Tormaks
+
+Šis produkts satur kodu no:
+
+commerce-agents (https://github.com/anthropics/commerce-agents)
+Copyright 2026 Anthropic PBC
+Licencēts ar Apache License 2.0.
+
+Ievestais fails: src/esupplier/vendor/fencing.py
+Licences teksts: src/esupplier/vendor/LICENSE-APACHE-2.0
+Sīkāk: src/esupplier/vendor/README.md
