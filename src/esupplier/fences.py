@@ -43,7 +43,12 @@ ATTACHMENT_FENCE = Fence(
         "sūtītājs; `neizlasitie` ir faili, kuru saturu tu NEREDZI. Par KATRU "
         "no tiem uzraksti iekšējā blokā, ka cilvēkam tas jāatver — klusēt "
         "nedrīkst: piedāvājums, kas uzbūvēts uz pusi no pieprasījuma, izskatās "
-        "pēc pilnas atbildes."
+        "pēc pilnas atbildes. Ja pielikumam ir lauks `avots` ar atšifrējumu, "
+        "tā tekstu neviens nav rakstījis — to no bildes nolasīja modelis, un "
+        "kļūda tur ir tieši izmērā vai daudzumā. Tādu izmēru NEUZSKATI par "
+        "apstiprinātu: piedāvājumā to atkārto un vaicā klientam apstiprinājumu, "
+        "bet iekšējā blokā uzraksti, ka skaitlis nāk no attēla un jāsalīdzina "
+        "ar oriģinālu."
     ),
 )
 

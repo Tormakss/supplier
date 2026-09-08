@@ -33,6 +33,7 @@ from ..catalog import db
 from ..catalog.search import catalog_stats
 from ..config import IMAP_USER, MAIL_BATCH, MAIL_POLL_S
 from . import draft as draft_mod
+from . import vision
 from .imap import MailError, Mailbox
 from .message import Incoming, as_prompt, parse_message, skip_reason
 
@@ -90,6 +91,11 @@ def process_one(
     reason = skip_reason_for(incoming)
     if reason:
         return Outcome(incoming, "skipped", reason)
+
+    # Skenēts rasējums un telefona foto teksta slāni nesatur; vienīgais, kas
+    # tos izlasa, ir modelis, kurš attēlu redz. Solis notiek ŠEIT, ne parsējot:
+    # `parse_message` ir tīra funkcija bez tīkla, un tā tai jāpaliek.
+    vision.transcribe(incoming.attachments, client)
 
     # Katrai vēstulei SAVA vēsture. Kopīgs saraksts nozīmētu, ka otrā klienta
     # pieprasījumam modelis redz pirmā klienta preces un cenas.
@@ -153,7 +159,17 @@ def process_one(
             "Modelis iekšējo bloku NEUZRAKSTĪJA. Tas nenozīmē, ka nekas nav "
             "jādara — pārbaudi rezervāciju, termiņu un rēķinu ar roku."
         )
-    read = [item for item in incoming.attachments if item.read]
+    transcribed = incoming.transcribed_attachments
+    if transcribed:
+        # Atsevišķi no nolasītajiem, un stiprāk. Excel aile ir tas, kas failā
+        # rakstīts; atšifrējums ir tas, ko modelis attēlā saskatīja, un kļūda
+        # tur ir tieši izmērā, pēc kura tiek izvēlēta prece.
+        warnings.append(
+            "Šo pielikumu tekstu modelis NOLASĪJA NO ATTĒLA: "
+            + ", ".join(item.name for item in transcribed)
+            + ". Salīdzini izmērus un daudzumus ar oriģinālu pirms sūtīšanas."
+        )
+    read = [item for item in incoming.attachments if item.read and not item.transcribed]
     if read:
         # Izvilkums nav oriģināls: tabulas aile, izmēra atzīme vai rasējuma
         # bilde tajā var nebūt. Menedžerim jāzina, ka piedāvājuma daļa nāk no
@@ -220,7 +236,7 @@ def skip_reason_for(incoming: Incoming) -> str:
     Galvenes pārbaudi veic `message.skip_reason`; šeit paliek tas, ko var
     pateikt bez MIME objekta.
     """
-    if not incoming.body.strip() and not any(i.read for i in incoming.attachments):
+    if not incoming.has_content:
         return "tukšs ķermenis"
     if not incoming.recipient:
         return "nav adreses, uz kuru atbildēt"
@@ -282,7 +298,7 @@ def run_once(
                 mime,
                 incoming.body,
                 own_address=IMAP_USER,
-                has_attachment_text=any(i.read for i in incoming.attachments),
+                has_attachment_text=incoming.has_attachment_content,
             )
             if header_reason:
                 outcome = Outcome(incoming, "skipped", header_reason)

@@ -15,25 +15,38 @@ lieto arī `message.py` — tas ir slānis virsū šim.
 from __future__ import annotations
 
 import html
+import importlib.util
 import re
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from io import BytesIO
+from pathlib import Path
 from xml.etree import ElementTree
 
 from ..config import (
+    MAIL_ARCHIVE_MAX_FILES,
     MAIL_ATTACHMENTS_TEXT_LIMIT,
     MAIL_ATTACHMENT_MAX_BYTES,
     MAIL_ATTACHMENT_PDF_PAGES,
     MAIL_ATTACHMENT_TEXT_LIMIT,
+    SOFFICE_BIN,
+    SOFFICE_TIMEOUT_S,
 )
 
 try:  # pragma: no cover — atkarība ir `pyproject.toml`, bet trūkums nedrīkst
     from pypdf import PdfReader  # nogāzt visu pastkastītes gājienu
 except ImportError:  # pragma: no cover
     PdfReader = None  # type: ignore[assignment]
+
+try:  # pragma: no cover — vecais Excel formāts; bez tā tas paliek cilvēkam
+    import xlrd
+except ImportError:  # pragma: no cover
+    xlrd = None  # type: ignore[assignment]
 
 #: Kodējumi, ar kuriem mēģinām teksta pielikumu, ja galvenē kodējuma nav.
 #: `cp1257` ir tas, kurā Latvijā joprojām nāk vecās `.txt` un `.csv` izdrukas.
@@ -58,10 +71,23 @@ class Attachment:
     text: str = ""
     #: Kāpēc teksta nav. Cilvēkam lasāms, aiziet menedžerim iekšējā blokā.
     note: str = ""
+    #: True, ja tekstu nolasīja modelis no attēla, ne parsētājs no faila.
+    #: Atšifrējums var kļūdīties tieši izmēros, tāpēc tas iet atzīmēts.
+    transcribed: bool = False
+    #: Baiti, kamēr tie vēl var noderēt atšifrēšanai. Pēc tās tiek iztukšoti.
+    data: bytes = b""
+    #: Ko tieši saturam baitos: `image/...` vai `application/pdf`. Tukšs =
+    #: atšifrēt nav ko, arī tad, ja pielikums palika neizlasīts.
+    image_mime: str = ""
 
     @property
     def read(self) -> bool:
         return bool(self.text.strip())
+
+    @property
+    def can_transcribe(self) -> bool:
+        """Vai pielikumu vēl var izlasīt, uz to paskatoties."""
+        return bool(self.image_mime and self.data and not self.read)
 
 
 # --- MIME palīgi -----------------------------------------------------------
@@ -236,6 +262,380 @@ def _from_xlsx(data: bytes) -> tuple[str, str]:
     return text, ""
 
 
+#: PowerPoint teksts sēž DrawingML `<a:t>` mezglos, ne savā telpvārdā.
+_DRAW_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+
+def _from_pptx(data: bytes) -> tuple[str, str]:
+    try:
+        archive = zipfile.ZipFile(BytesIO(data))
+    except (zipfile.BadZipFile, OSError):
+        return "", "PowerPoint failu neizdevās atvērt"
+    with archive:
+        names = [n for n in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
+        # `slide10` failu sarakstā stāv pirms `slide2`; secība nāk no skaitļa.
+        names.sort(key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[-1]).group(1)))
+        blocks: list[str] = []
+        for number, name in enumerate(names, start=1):
+            try:
+                root = ElementTree.fromstring(archive.read(name))
+            except (KeyError, ElementTree.ParseError, OSError):
+                continue
+            lines = []
+            for para in root.iter(f"{_DRAW_NS}p"):
+                line = "".join(node.text or "" for node in para.iter(f"{_DRAW_NS}t")).strip()
+                if line:
+                    lines.append(line)
+            if lines:
+                blocks.append(f"[slaids {number}]\n" + "\n".join(lines))
+    text = _tidy("\n\n".join(blocks))
+    if not text:
+        return "", "PowerPoint fails bez teksta"
+    return text, ""
+
+
+def _xls_cell(value: object) -> str:
+    """`xlrd` katru skaitli atdod kā `float`; "358.0" tabulā ir troksnis."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _from_xls(data: bytes) -> tuple[str, str]:
+    """Vecais binārais Excel (BIFF). Tāds nāk no grāmatvedības programmām."""
+    if xlrd is None:  # pragma: no cover
+        return "", "vecais Excel formāts — lasītājs nav uzstādīts (xlrd)"
+    try:
+        book = xlrd.open_workbook(file_contents=data)
+    except Exception:  # xlrd met savus izņēmumus par katru bojājuma veidu
+        return "", "vecais Excel formāts — failu neizdevās atvērt"
+    blocks: list[str] = []
+    for sheet in book.sheets():
+        rows: list[str] = []
+        for index in range(min(sheet.nrows, _MAX_SHEET_ROWS)):
+            cells = [_xls_cell(value) for value in sheet.row_values(index)]
+            if not any(cell.strip() for cell in cells):
+                continue
+            rows.append(" | ".join(cells))
+        if sheet.nrows > _MAX_SHEET_ROWS:
+            rows.append("[… lapa turpinās]")
+        if rows:
+            body = "\n".join(rows)
+            blocks.append(f"[lapa: {sheet.name}]\n{body}" if sheet.name else body)
+    text = _tidy("\n\n".join(blocks))
+    if not text:
+        return "", "vecais Excel formāts bez datiem"
+    return text, ""
+
+
+#: RTF grupas, kuru saturs ir dokumenta iekšas, ne teksts: fontu tabula, stili,
+#: iegultā bilde. Bez šī izraksta modelim aizietu fontu nosaukumi un hex bloki.
+_RTF_SKIP = frozenset(
+    {
+        "fonttbl", "colortbl", "stylesheet", "info", "pict", "object", "themedata",
+        "datastore", "listtable", "listoverridetable", "rsidtbl", "generator",
+        "xmlnstbl", "latentstyles", "filetbl", "revtbl",
+    }
+)
+_RTF_WORD = re.compile(r"\\([a-zA-Z]+)(-?\d+)? ?")
+_RTF_HEX = re.compile(r"\\'([0-9a-fA-F]{2})")
+
+
+def _rtf_to_text(raw: str) -> str:
+    r"""RTF -> teksts. Pietiekami, lai izlasītu pieprasījumu, ne lai atveidotu.
+
+    Rakstīts ar roku, ne ar regulāro izteiksmi: `{\*\pict ...}` iekšas jāizlaiž
+    veselas, un tas prasa zināt, kurā grupas dziļumā atrodamies.
+    """
+    out: list[str] = []
+    depth = 0
+    skip_depth = 0  # 0 = nekas netiek izlaists
+    index = 0
+    length = len(raw)
+
+    while index < length:
+        char = raw[index]
+        if char == "{":
+            depth += 1
+            index += 1
+            continue
+        if char == "}":
+            if skip_depth and depth <= skip_depth:
+                skip_depth = 0
+            depth -= 1
+            index += 1
+            continue
+        if char == "\\":
+            hexed = _RTF_HEX.match(raw, index)
+            if hexed:
+                index = hexed.end()
+                if not skip_depth:
+                    out.append(bytes([int(hexed.group(1), 16)]).decode("cp1252", "replace"))
+                continue
+            word = _RTF_WORD.match(raw, index)
+            if word:
+                name, argument = word.group(1), word.group(2)
+                index = word.end()
+                if name in _RTF_SKIP:
+                    skip_depth = depth
+                elif skip_depth:
+                    pass
+                elif name in ("par", "line", "sect", "row", "pard"):
+                    out.append("\n")
+                elif name == "tab":
+                    out.append("\t")
+                elif name == "cell":
+                    out.append(" | ")
+                elif name == "u" and argument:
+                    out.append(chr(int(argument) % 0x10000))
+                    # Aiz `\uN` stāv aizvietotājzīme vecākiem lasītājiem.
+                    if index < length and raw[index] not in "\\{}":
+                        index += 1
+                continue
+            if index + 1 < length:
+                if raw[index + 1] == "*":
+                    skip_depth = depth
+                elif not skip_depth:
+                    out.append(raw[index + 1])
+                index += 2
+                continue
+            index += 1
+            continue
+        if not skip_depth:
+            out.append(char)
+        index += 1
+
+    return "".join(out)
+
+
+def _from_rtf(data: bytes) -> tuple[str, str]:
+    text = _tidy(_rtf_to_text(_decode_bytes(data)))
+    text = re.sub(r"(?m)\s*\|\s*$", "", text)  # tabulas rindas aste
+    text = _tidy(text)
+    if not text:
+        return "", "RTF fails bez teksta"
+    return text, ""
+
+
+#: DXF tekstu tur grupas ar kodu 1 (pamatteksts) un 3 (garā MTEXT turpinājums).
+_DXF_TEXT_CODES = ("1", "3")
+#: MTEXT iekšā ir formatējums: `\P` rindas pārnesums, `\fArial|b0;` fonta maiņa.
+_DXF_FORMAT = re.compile(r"\\[A-Za-z][^;\\]*;")
+
+
+def _from_dxf(data: bytes) -> tuple[str, str]:
+    """ASCII DXF: uzraksti, izmēru atzīmes un tabulas rindas no rasējuma.
+
+    Ģeometriju izlaižam apzināti. Koordinātas modelim neko nepasaka, bet
+    uzraksts "EPDM 12x20, 358 gab." rasējuma stūrī ir pats pieprasījums.
+    """
+    if data[:18] == b"AutoCAD Binary DXF":
+        return "", "binārs DXF rasējums — jāatver ar roku"
+    lines = [line.strip() for line in _decode_bytes(data).splitlines()]
+    values: list[str] = []
+    seen: set[str] = set()
+    index = 0
+    while index < len(lines) - 1:
+        code, value = lines[index], lines[index + 1]
+        if not code.lstrip("-").isdigit():
+            index += 1
+            continue
+        if code in _DXF_TEXT_CODES and value:
+            cleaned = _DXF_FORMAT.sub("", value.replace("\\P", "\n"))
+            cleaned = cleaned.replace("{", "").replace("}", "").strip()
+            # Rāmja un stūra uzraksti rasējumā atkārtojas katrā izkārtojumā.
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                values.append(cleaned)
+        index += 2
+    text = _tidy("\n".join(values))
+    if not text:
+        return "", "DXF rasējums bez uzrakstiem — jāatver ar roku"
+    return text, ""
+
+
+# --- vecie binārie Office formāti ------------------------------------------
+def _soffice_bin() -> str:
+    """LibreOffice, ja tas uz šīs mašīnas ir. Obligāta atkarība tas nav."""
+    return SOFFICE_BIN or shutil.which("soffice") or shutil.which("libreoffice") or ""
+
+
+def _convert_with_soffice(data: bytes, suffix: str, target: str) -> tuple[bytes, str]:
+    """(rezultāta baiti, iemesls). Viens no diviem vienmēr ir tukšs."""
+    binary = _soffice_bin()
+    if not binary:
+        return b"", "jāatver ar roku (LibreOffice uz servera nav)"
+    with tempfile.TemporaryDirectory() as folder:
+        source = Path(folder) / f"pielikums{suffix}"
+        source.write_bytes(data)
+        try:
+            subprocess.run(
+                [binary, "--headless", "--norestore", "--convert-to", target,
+                 "--outdir", folder, str(source)],
+                capture_output=True,
+                timeout=SOFFICE_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return b"", "konvertācija neizdevās"
+        result = Path(folder) / f"pielikums.{target.split(':')[0]}"
+        if not result.exists():
+            return b"", "konvertācija neizdevās"
+        try:
+            return result.read_bytes(), ""
+        except OSError:  # pragma: no cover
+            return b"", "konvertācija neizdevās"
+
+
+def _from_ole(data: bytes, suffix: str) -> tuple[str, str]:
+    """Vecais `.doc`, `.xls`, `.ppt` — OLE konteiners, ne ZIP.
+
+    `.xls` prot `xlrd`. Pārējos izlasa tikai LibreOffice, un tā uz servera var
+    nebūt; tad pielikums paliek cilvēkam ar godīgu iemeslu.
+    """
+    label = _KNOWN_BINARY.get(suffix, "vecais Office formāts")
+
+    if suffix in ("", ".xls", ".xlt"):
+        text, _ = _from_xls(data)
+        if text:
+            return text, ""
+
+    if suffix in (".ppt", ".pps"):
+        # Impress uz tekstu nekonvertē; caur PDF teksta slānis saglabājas.
+        converted, problem = _convert_with_soffice(data, suffix, "pdf")
+        if converted:
+            return _from_pdf(converted)
+        return "", f"{label} — {problem}"
+
+    converted, problem = _convert_with_soffice(data, suffix or ".doc", "txt:Text")
+    if converted:
+        text = _tidy(_decode_bytes(converted))
+        if text:
+            return text, ""
+        return "", f"{label} bez teksta"
+    return "", f"{label} — {problem}"
+
+
+# --- arhīvi ----------------------------------------------------------------
+def _zip_members(data: bytes) -> tuple[list[tuple[str, bytes | None]], bool] | None:
+    try:
+        archive = zipfile.ZipFile(BytesIO(data))
+    except (zipfile.BadZipFile, OSError):
+        return None
+    members: list[tuple[str, bytes | None]] = []
+    truncated = False
+    with archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            if len(members) >= MAIL_ARCHIVE_MAX_FILES:
+                truncated = True
+                break
+            if info.file_size > MAIL_ATTACHMENT_MAX_BYTES:
+                members.append((info.filename, b""))
+                continue
+
+            try:
+                members.append((info.filename, archive.read(info)))
+            except (RuntimeError, zipfile.BadZipFile, OSError):
+                # Parolēts vai bojāts ieraksts. `None` to atšķir no tukša
+                # faila: iemesls menedžerim ir dažāds, un tukšs fails nav
+                # tas pats, kas fails, kuru mums neļāva atvērt.
+                members.append((info.filename, None))
+    return members, truncated
+
+
+def _sevenzip_members(data: bytes) -> tuple[list[tuple[str, bytes]], bool] | None:
+    try:  # pragma: no cover — neobligāta atkarība
+        import py7zr
+    except ImportError:
+        return None
+    try:  # pragma: no cover
+        with py7zr.SevenZipFile(BytesIO(data)) as archive:
+            extracted = archive.readall() or {}
+    except Exception:
+        return None
+    members = []  # pragma: no cover
+    for name, buffer in list(extracted.items())[:MAIL_ARCHIVE_MAX_FILES]:
+        members.append((name, buffer.read()))
+    return members, len(extracted) > MAIL_ARCHIVE_MAX_FILES
+
+
+def _rar_members(data: bytes) -> tuple[list[tuple[str, bytes]], bool] | None:
+    try:  # pragma: no cover — prasa arī `unrar` bināro failu
+        import rarfile
+    except ImportError:
+        return None
+    try:  # pragma: no cover
+        with rarfile.RarFile(BytesIO(data)) as archive:
+            infos = [i for i in archive.infolist() if not i.is_dir()]
+            members = [(i.filename, archive.read(i)) for i in infos[:MAIL_ARCHIVE_MAX_FILES]]
+        return members, len(infos) > MAIL_ARCHIVE_MAX_FILES
+    except Exception:
+        return None
+
+
+def archive_members(name: str, data: bytes) -> tuple[list[tuple[str, bytes | None]], bool] | None:
+    """Arhīva saturs vai `None`, ja tas nav arhīvs (vai to atvērt nevaram).
+
+    Rasējumu komplekts nāk ZIP failā, un līdz šim tas viss palika aiz durvīm.
+    Iekšējie faili tālāk iet pa to pašu ceļu, kas pielikumi — arī skenēts
+    rasējums ZIP failā nonāk pie atšifrēšanas.
+    """
+    lower = name.lower()
+    if lower.endswith(".7z"):
+        return _sevenzip_members(data)
+    if lower.endswith(".rar"):
+        return _rar_members(data)
+    if data[:4] == b"PK\x03\x04":
+        # `.docx`, `.xlsx` un `.pptx` arī ir ZIP faili. Izpakot tos nozīmētu
+        # padot modelim `[Content_Types].xml` tur, kur bija specifikācija.
+        return _zip_members(data) if _sniff_zip(data) == "zip" else None
+    if lower.endswith(".zip"):
+        return _zip_members(data)
+    return None
+
+
+# --- ko mums iedeva --------------------------------------------------------
+def _sniff_zip(data: bytes) -> str:
+    """ZIP iekšpuse pasaka, kas tas ir. Nosaukums mēdz melot: `.doc` fails, ko
+    Word saglabāja kā `.docx`, ir ikdiena."""
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as archive:
+            names = set(archive.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return ""
+    if "word/document.xml" in names:
+        return "docx"
+    if "xl/workbook.xml" in names:
+        return "xlsx"
+    if "ppt/presentation.xml" in names:
+        return "pptx"
+    return "zip"
+
+
+def _sniff(data: bytes) -> str:
+    """Formāts pēc baitiem. Tukšs = neizdevās, tad izšķir nosaukums."""
+    head = data[:12]
+    if head.startswith(b"%PDF"):
+        return "pdf"
+    if head.startswith(b"{\\rt"):
+        return "rtf"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return "ole"
+    if head.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"BM")):
+        return "image"
+    if head[:4] in (b"II*\x00", b"MM\x00*"):
+        return "image"
+    if head[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image"
+    if data[4:8] == b"ftyp" and data[8:12] in (b"heic", b"heix", b"mif1", b"hevc"):
+        return "image"
+    if head.startswith(b"PK\x03\x04"):
+        return _sniff_zip(data)
+    return ""
+
+
 #: Paplašinājumi, kuriem pat `application/octet-stream` nozīmē tekstu. Pasta
 #: klienti tipu bieži nesaka vispār, tāpēc formātu izšķir nosaukums.
 _TEXT_SUFFIXES = (".txt", ".csv", ".md", ".log", ".json", ".xml", ".yml", ".yaml", ".ini")
@@ -258,39 +658,164 @@ _KNOWN_BINARY = {
 }
 
 
+def _kind_from_name(suffix: str, ctype: str) -> str:
+    """Formāts pēc nosaukuma un MIME tipa. Izmanto tikai tad, ja baiti klusē."""
+    if suffix == ".pdf" or ctype == "application/pdf":
+        return "pdf"
+    if suffix == ".docx" or "wordprocessingml" in ctype:
+        return "docx"
+    if suffix in (".xlsx", ".xlsm") or "spreadsheetml" in ctype:
+        return "xlsx"
+    if suffix == ".pptx" or "presentationml" in ctype:
+        return "pptx"
+    if suffix in (".xls", ".xlt"):
+        return "xls"
+    if suffix in (".doc", ".ppt", ".pps"):
+        return "ole"
+    if suffix == ".rtf" or ctype in ("application/rtf", "text/rtf"):
+        return "rtf"
+    if suffix == ".dxf":
+        return "dxf"
+    if suffix in _HTML_SUFFIXES or ctype == "text/html":
+        return "html"
+    if suffix in _TEXT_SUFFIXES or ctype.startswith("text/"):
+        return "text"
+    if suffix in _IMAGE_SUFFIXES or ctype.startswith("image/"):
+        return "image"
+    if suffix in (".zip", ".rar", ".7z"):
+        return "archive"
+    return ""
+
+
+def file_kind(name: str, content_type: str, data: bytes) -> str:
+    """Ko mums iedeva. Baiti sver vairāk par nosaukumu.
+
+    Pasta klients paziņo `application/octet-stream` biežāk, nekā pasaka
+    patiesību, un klients savu `.docx` nosauc par `.doc`. Baitus neviens no
+    abiem nemaina.
+    """
+    lower = name.lower()
+    suffix = lower[lower.rfind(".") :] if "." in lower else ""
+    return _sniff(data) or _kind_from_name(suffix, (content_type or "").lower())
+
+
 def extract_text(name: str, content_type: str, data: bytes, charset: str = "") -> tuple[str, str]:
     """(teksts, piezīme) no viena pielikuma. Viens no diviem vienmēr ir tukšs."""
     lower = name.lower()
-    ctype = (content_type or "").lower()
+    suffix = lower[lower.rfind(".") :] if "." in lower else ""
+    kind = file_kind(name, content_type, data)
 
-    if lower.endswith(".pdf") or ctype == "application/pdf":
+    if kind == "pdf":
         return _from_pdf(data)
-    if lower.endswith(".docx") or "wordprocessingml" in ctype:
+    if kind == "docx":
         return _from_docx(data)
-    if lower.endswith((".xlsx", ".xlsm")) or "spreadsheetml" in ctype:
+    if kind == "xlsx":
         return _from_xlsx(data)
-    if lower.endswith(_HTML_SUFFIXES) or ctype == "text/html":
+    if kind == "pptx":
+        return _from_pptx(data)
+    if kind == "xls":
+        return _from_xls(data)
+    if kind == "ole":
+        return _from_ole(data, suffix)
+    if kind == "rtf":
+        return _from_rtf(data)
+    if kind == "dxf":
+        return _from_dxf(data)
+    if kind == "html":
         text = _tidy(strip_html(_decode_bytes(data, charset)))
         return (text, "") if text else ("", "HTML fails bez teksta")
-    if lower.endswith(_TEXT_SUFFIXES) or ctype.startswith("text/"):
+    if kind == "text":
         text = _tidy(_decode_bytes(data, charset))
         return (text, "") if text else ("", "tukšs fails")
-    if lower.endswith(_IMAGE_SUFFIXES) or ctype.startswith("image/"):
+    if kind == "image":
+        # Teksta slāņa attēlā nav un nebūs. Izlasīt to var tikai paskatoties —
+        # to dara `vision.transcribe`, un tikai tad šī piezīme pazūd.
         return "", "attēls — teksta tajā nav, jāatver ar roku"
+    if kind in ("zip", "archive"):
+        # Šeit nokļūst tikai tas, ko `extract_attachments` izpakot nespēja.
+        # Iemesls ir vai nu trūkstošs lasītājs, vai bojāts fails, un menedžerim
+        # tā ir starpība: pirmo var salabot uz servera, otro ne.
+        if suffix == ".7z":
+            missing = importlib.util.find_spec("py7zr") is None
+            return "", "7z arhīvs — " + (
+                "jāatver ar roku (`py7zr` nav uzstādīts)" if missing
+                else "izpakot neizdevās, jāatver ar roku"
+            )
+        if suffix == ".rar":
+            missing = importlib.util.find_spec("rarfile") is None
+            return "", "RAR arhīvs — " + (
+                "jāatver ar roku (`rarfile` nav uzstādīts)" if missing
+                else "izpakot neizdevās, jāatver ar roku"
+            )
+        return "", "arhīvu atvērt neizdevās (bojāts vai parolēts) — jāatver ar roku"
 
-    suffix = lower[lower.rfind("."):] if "." in lower else ""
     if suffix in _KNOWN_BINARY:
         return "", f"{_KNOWN_BINARY[suffix]} — jāatver ar roku"
     return "", "nezināms formāts — jāatver ar roku"
 
 
+def _make_attachment(
+    name: str, content_type: str, data: bytes | None, charset: str
+) -> Attachment:
+    """Viens pielikums ar visu, ko no tā izdevās izlasīt bez tīkla.
+
+    `data is None` nozīmē, ka baitus dabūt neizdevās — parolēts ieraksts
+    arhīvā. Tas nav tas pats, kas tukšs fails, un menedžerim tas jāredz.
+    """
+    if data is None:
+        return Attachment(
+            name=name,
+            content_type=content_type,
+            note="parolēts vai bojāts ieraksts arhīvā — jāatver ar roku",
+        )
+    item = Attachment(name=name, content_type=content_type, size=len(data))
+    if not data:
+        item.note = "tukšs pielikums"
+        return item
+    if len(data) > MAIL_ATTACHMENT_MAX_BYTES:
+        item.note = f"pārāk liels ({len(data) // 1_000_000} MB) — jāatver ar roku"
+        return item
+
+    item.text, item.note = extract_text(name, content_type, data, charset)
+    if not item.text:
+        # Baitus paturam tikai tad, ja uz tiem vēl ir vērts paskatīties.
+        kind = file_kind(name, content_type, data)
+        if kind == "pdf":
+            item.data, item.image_mime = data, "application/pdf"
+        elif kind == "image":
+            item.data, item.image_mime = data, content_type or "image/*"
+    return item
+
+
+def apply_budget(items: list[Attachment]) -> None:
+    """Nogriež pielikumu tekstu pa vienam un kopā. Maina sarakstu uz vietas.
+
+    Atsevišķa funkcija tāpēc, ka atšifrējums pienāk vēlāk, jau pēc izpakošanas,
+    un arī tas jāieskaita tajā pašā budžetā. Divi 40 lapu PDF faili citādi
+    izspiestu no konteksta pašu vēstuli, kuras dēļ viss notiek.
+    """
+    budget = MAIL_ATTACHMENTS_TEXT_LIMIT
+    for item in items:
+        if not item.text:
+            continue
+        if len(item.text) > MAIL_ATTACHMENT_TEXT_LIMIT:
+            item.text = item.text[:MAIL_ATTACHMENT_TEXT_LIMIT] + "\n[… pielikums apcirsts]"
+        if budget <= 0:
+            item.text = ""
+            item.note = "pārējie pielikumi neietilpa budžetā — jāatver ar roku"
+        elif len(item.text) > budget:
+            item.text = item.text[:budget] + "\n[… pielikums apcirsts]"
+            budget = 0
+        else:
+            budget -= len(item.text)
+
+
 def extract_attachments(msg: EmailMessage) -> list[Attachment]:
     """Visi vēstules pielikumi ar izvilkto tekstu.
 
-    Kopējo zīmju limitu turam šeit, ne promptā: divi 40 lapu PDF failu
-    katalogi vienā vēstulē citādi izspiestu no konteksta pašu pieprasījumu.
+    Arhīvs šeit pazūd un tā vietā parādās tas, kas bija iekšā: rasējumu ZIP
+    fails pats par sevi nav pieprasījums, bet katrs fails tajā var būt.
     """
-    budget = MAIL_ATTACHMENTS_TEXT_LIMIT
     found: list[Attachment] = []
     for part in msg.walk():
         raw_name = part.get_filename()
@@ -298,27 +823,35 @@ def extract_attachments(msg: EmailMessage) -> list[Attachment]:
             continue
         name = decode_header_value(raw_name)
         data = part.get_payload(decode=True) or b""
-        item = Attachment(name=name, content_type=part.get_content_type(), size=len(data))
+        content_type = part.get_content_type()
+        charset = part.get_content_charset() or ""
 
-        if not data:
-            item.note = "tukšs pielikums"
-        elif len(data) > MAIL_ATTACHMENT_MAX_BYTES:
-            item.note = f"pārāk liels ({len(data) // 1_000_000} MB) — jāatver ar roku"
-        else:
-            item.text, item.note = extract_text(
-                name, item.content_type, data, part.get_content_charset() or ""
+        unpacked = None
+        if data and len(data) <= MAIL_ATTACHMENT_MAX_BYTES:
+            unpacked = archive_members(name, data)
+        if unpacked is None:
+            found.append(_make_attachment(name, content_type, data, charset))
+            continue
+
+        members, truncated = unpacked
+        for member_name, member_data in members:
+            # Vārds paliek salikts: menedžerim jāzina, kurā arhīvā to meklēt.
+            found.append(_make_attachment(f"{name} → {member_name}", "", member_data, ""))
+        if not members:
+            found.append(
+                Attachment(name=name, content_type=content_type, size=len(data),
+                           note="arhīvs ir tukšs")
+            )
+        elif truncated:
+            found.append(
+                Attachment(
+                    name=name,
+                    content_type=content_type,
+                    size=len(data),
+                    note=f"arhīvā ir vairāk nekā {MAIL_ARCHIVE_MAX_FILES} faili — "
+                         "pārējie netika atvērti",
+                )
             )
 
-        if item.text and len(item.text) > MAIL_ATTACHMENT_TEXT_LIMIT:
-            item.text = item.text[:MAIL_ATTACHMENT_TEXT_LIMIT] + "\n[… pielikums apcirsts]"
-        if item.text:
-            if budget <= 0:
-                item.text = ""
-                item.note = "pārējie pielikumi neietilpa budžetā — jāatver ar roku"
-            elif len(item.text) > budget:
-                item.text = item.text[:budget] + "\n[… pielikums apcirsts]"
-                budget = 0
-            else:
-                budget -= len(item.text)
-        found.append(item)
+    apply_budget(found)
     return found

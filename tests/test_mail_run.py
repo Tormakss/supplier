@@ -20,6 +20,7 @@ from esupplier.catalog import db
 from esupplier.mail import run as mail_run
 from esupplier.mail.attachments import Attachment
 from esupplier.mail.message import Incoming, parse_message
+from helpers_files import make_empty_pdf
 
 ANSWER = """\
 Labdien! Paldies par pieprasījumu.
@@ -101,6 +102,15 @@ def answers_dir(tmp_path, monkeypatch):
     """`atbildes/` uz laiku pārceļam, lai testi neaugļo īsto mapi."""
     monkeypatch.setattr(report, "ANSWERS_DIR", tmp_path / "atbildes")
     return tmp_path / "atbildes"
+
+
+class VisionClient:
+    """Viltus modelis attēlu atšifrēšanai. Tīkla te nav."""
+
+    class responses:
+        @staticmethod
+        def create(**_):
+            return type("Response", (), {"output_text": "EPDM profils D 12 mm\n358 gab."})()
 
 
 def fake_turn(text: str = ANSWER, **kwargs):
@@ -218,6 +228,67 @@ def test_read_attachments_are_flagged_too(conn, monkeypatch) -> None:
 
     assert any("spec.xlsx" in w and "nolasīts" in w for w in outcome.warnings)
     assert not any("neizlasīja" in w for w in outcome.warnings)
+
+
+def test_transcribed_attachment_gets_a_stronger_warning(conn, monkeypatch) -> None:
+    """Excel aile ir tas, kas failā rakstīts. Atšifrējums ir tas, ko modelis
+    attēlā saskatīja, un kļūda tur ir tieši izmērā, pēc kura izvēlas preci."""
+    monkeypatch.setattr(mail_run, "run_turn", fake_turn())
+    scanned = Attachment(name="skens.pdf", text="EPDM 12 mm", transcribed=True)
+    incoming = replace(CLIENT, attachments=[scanned])
+    outcome = mail_run.process_one(incoming, conn, client=None, box=FakeBox({}))
+
+    assert any("skens.pdf" in w and "NO ATTĒLA" in w for w in outcome.warnings)
+    # Vienā vēstulē divas reizes par vienu failu menedžeris vairs nelasa.
+    assert not any("nolasīts automātiski" in w for w in outcome.warnings)
+    assert "NO ATTĒLA" in outcome.internal
+
+
+def test_scanned_drawing_reaches_the_model(conn, monkeypatch) -> None:
+    """Vēstule ar tukšu ķermeni un skenētu rasējumu. Līdz šim modelim aizgāja
+    tukšums, un piedāvājums tika būvēts uz nekā."""
+    seen: list[list[dict]] = []
+
+    def spy(messages, conn=None, client=None, **_):
+        seen.append(messages)
+        return AgentResult(text=ANSWER)
+
+    monkeypatch.setattr(mail_run, "run_turn", spy)
+    incoming = replace(
+        CLIENT,
+        body="",
+        attachments=[
+            Attachment(
+                name="skens.pdf",
+                note="PDF bez teksta (skenēts vai rasējums) — jāatver ar roku",
+                data=make_empty_pdf(),
+                image_mime="application/pdf",
+            )
+        ],
+    )
+    outcome = mail_run.process_one(incoming, conn, client=VisionClient(), box=FakeBox({}))
+
+    assert outcome.status == "drafted"
+    assert "EPDM profils D 12 mm" in seen[0][0]["content"]
+    assert "attēla atšifrējums" in seen[0][0]["content"]
+
+
+def test_letter_with_only_a_scanned_attachment_is_not_empty() -> None:
+    """Atšifrēšana notiek pēc šī sprieduma, tāpēc te skaitās "vēl atšifrējams",
+    ne "jau izlasīts". Citādi vēstule nokristu pirms rasējumu kāds atvēra."""
+    incoming = replace(
+        CLIENT,
+        body="",
+        attachments=[Attachment(name="skens.pdf", data=b"%PDF-1.4", image_mime="application/pdf")],
+    )
+    assert mail_run.skip_reason_for(incoming) == ""
+
+
+def test_letter_without_anything_readable_is_still_empty() -> None:
+    incoming = replace(
+        CLIENT, body="", attachments=[Attachment(name="detala.dwg", note="AutoCAD rasējums")]
+    )
+    assert mail_run.skip_reason_for(incoming) == "tukšs ķermenis"
 
 
 def test_invented_sku_and_price_reach_the_manager(conn, monkeypatch) -> None:

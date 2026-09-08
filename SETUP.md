@@ -41,7 +41,8 @@ uv sync
 ```
 
 Izveido `.venv/` un ievelk `httpx`, `openai`, `markdown-it-py`, `rich`,
-`python-dotenv` un `pytest`. Versijas nāk no `uv.lock` — nekas netiek
+`python-dotenv`, `pytest` un pielikumu lasītājus (`pypdf`, `pypdfium2`,
+`xlrd`, `pillow`). Versijas nāk no `uv.lock` — nekas netiek
 atjaunināts pats no sevis.
 
 ## 4. Vides mainīgie
@@ -67,10 +68,25 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt sagatavotās vēstules |
 | `ESUPPLIER_ATTACHMENT_CHARS` | `4000` | cik zīmju no viena pielikuma aiziet modelim |
 | `ESUPPLIER_ATTACHMENTS_CHARS` | `12000` | cik zīmju kopā no visiem pielikumiem |
+| `ESUPPLIER_ATTACHMENT_VISION` | `1` | `0` izslēdz skenētu rasējumu atšifrēšanu |
+| `ESUPPLIER_VISION_MODEL` | = `ESUPPLIER_MODEL` | modelis, kas prot lasīt attēlus |
 
 Pielikumu saturs un klienta vēstule modelim aiziet iežogoti, un artikulus
 ar cenām pirms melnraksta salīdzina ar rīku atbildēm. Abu apraksts ir
 README sadaļā "Svešs teksts un izcelsme".
+
+**Skenēts rasējums un foto** teksta slāni nesatur; tos izlasa modelis, kurš
+attēlu redz, un katrs tāds pielikums maksā vienu papildu izsaukumu. Modelim
+`ESUPPLIER_VISION_MODEL` mainīgajā jāprot lasīt attēlus. Ja tāda nav vai
+izmaksas pilotā negribas, liec `ESUPPLIER_ATTACHMENT_VISION=0` — tad skenētie
+rasējumi atkal paliek menedžerim ar piezīmi "jāatver ar roku".
+
+**Vecais `.doc` un `.ppt`** prasa LibreOffice. Ja `soffice` uz mašīnas nav,
+viss pārējais strādā tāpat, tikai šie divi formāti paliek cilvēkam:
+
+```bash
+soffice --version      # ja atbild, nekas nav jādara
+```
 
 Ja gribi, lai aģents lasa pastu pats (`uv run mail`, skat. 6.a sadaļu), vajag
 vēl trīs:
@@ -129,8 +145,9 @@ uv run sync --source=scrape     # rezerves ceļš: sitemap + JSON-LD, lēnāk
 uv run pytest
 ```
 
-Gaidāms `320 passed` zem sekundes. Testi neiet tīklā un nemaksā tokenus. Daļa
-meklēšanas testu prasa `data/catalog.db` — bez tā tie tiek izlaisti, ne kritīs.
+Gaidāms `443 passed` zem divām sekundēm. Testi neiet tīklā un nemaksā
+tokenus. Daļa meklēšanas testu prasa `data/catalog.db` — bez tā tie tiek
+izlaisti, ne kritīs.
 
 Tad pirmais īstais jautājums:
 
@@ -223,6 +240,15 @@ apriti. Kad būs skaidrs, kurš domēns ir galvenais, `SITE_URL` var pārlikt.
 
 **`Trūkst pastkastītes datu.`** `.env` nav `ESUPPLIER_IMAP_HOST`, `_USER` vai
 `_PASSWORD`.
+
+**Iekšējā blokā stāv "atšifrēt neizdevās".** Modelis `ESUPPLIER_VISION_MODEL`
+mainīgajā attēlus lasīt neprot vai izsaukums nokrita. Vēstule tiek sagatavota
+tāpat, tikai skenētais rasējums paliek cilvēkam. Pārbaudi modeļa nosaukumu vai
+izslēdz atšifrēšanu ar `ESUPPLIER_ATTACHMENT_VISION=0`.
+
+**Iekšējā blokā stāv "jāatver ar roku (LibreOffice uz servera nav)".** Vecais
+`.doc` vai `.ppt`. Uzstādi LibreOffice vai norādi ceļu `ESUPPLIER_SOFFICE`
+mainīgajā.
 
 **`Neatradu melnrakstu mapi.`** Serveris nedod `\Drafts` karogu un mape saucas
 citādi. Kļūdas tekstā ir visu mapju saraksts — izvēlies pareizo un ieliec to

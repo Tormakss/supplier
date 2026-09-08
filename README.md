@@ -143,8 +143,9 @@ nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
 | Solis | Kas notiek |
 |---|---|
 | Citāti un paraksts | nogriezti — citādi pārsūtītā sarakstē minētā vecā prece nonāk jaunajā piedāvājumā |
-| Pielikumi | PDF, Word, Excel, teksts un CSV tiek atvērti; teksts aiziet modelim atsevišķā, iežogotā blokā |
-| Pielikumi, ko neizlasa | skenēti PDF, attēli, CAD, arhīvi — nosaukums un iemesls aiziet modelim un iekšējā blokā |
+| Pielikumi | PDF, Word, Excel, PowerPoint, RTF, CSV un DXF tiek atvērti, arhīvi izpakoti; teksts aiziet modelim atsevišķā, iežogotā blokā |
+| Skenēti rasējumi un foto | attēloti un atšifrēti ar modeli; atšifrējums aiziet atzīmēts kā atšifrējums |
+| Pielikumi, ko neizlasa | `.dwg`, 3D modeļi, parolēti faili — nosaukums un iemesls aiziet modelim un iekšējā blokā |
 | Jaunumi, auto-atbildes, `no-reply` | izlaisti pirms modeļa, ne pēc |
 | Adresāts | `Reply-To`, ja tāds ir; citādi `From` |
 | Ķēde | `In-Reply-To` un `References`, lai atbilde nesadala sarunu divās vietās |
@@ -156,23 +157,54 @@ nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
 | Formāts | Kas notiek |
 |---|---|
 | `.pdf` | teksts no pirmajām 20 lapām; PDF ar paroli mēģinām atvērt ar tukšu paroli |
-| `.docx` | rindkopas un tabulas (šūnas atdalītas ar `\|`) |
-| `.xlsx`, `.xlsm` | rindas pa lapām, ar lapas nosaukumu |
+| `.docx`, `.doc` | rindkopas un tabulas (šūnas atdalītas ar `\|`); vecais `.doc` — caur LibreOffice |
+| `.xlsx`, `.xlsm`, `.xls` | rindas pa lapām, ar lapas nosaukumu |
+| `.pptx`, `.ppt` | teksts pa slaidiem; vecais `.ppt` — caur LibreOffice |
+| `.rtf` | teksts bez fontu tabulas un stiliem |
 | `.txt`, `.csv`, `.md`, `.xml`, `.json` | teksts; bez kodējuma galvenē mēģinām `utf-8`, tad `cp1257` |
 | `.html` | teksts bez iezīmēm |
-| attēli, `.dwg`, `.dxf`, `.doc`, `.xls`, arhīvi | **netiek lasīti** — nosaukums un iemesls aiziet iekšējā blokā |
+| `.dxf` | uzraksti un izmēru atzīmes no rasējuma; ģeometrija ne |
+| `.zip`, `.7z` | izpakots; katrs fails iekšā iet pa šo pašu tabulu |
+| attēli, skenēts PDF | **atšifrēti ar modeli** — skat. zemāk |
+| `.dwg`, 3D modeļi, `.rar` bez `unrar` | **netiek lasīti** — nosaukums un iemesls aiziet iekšējā blokā |
 
-**Skenēts PDF ir bilde.** Ja teksta tajā nav, pielikums paliek atzīmēts kā
-neizlasīts, un iekšējā blokā menedžeris redz "PDF bez teksta (skenēts vai
-rasējums) — jāatver ar roku". Tukšs izvilkums, kas izliktos par izlasītu, būtu
-sliktāks par neizlasīšanu vispār: modelis klusētu par pusi pieprasījuma.
+Arhīvs pats par sevi pieprasījums nav, tāpēc tas pazūd un tā vietā parādās tas,
+kas bija iekšā: `rasejumi.zip → skice-3.pdf`. Salikto vārdu menedžeris redz
+iekšējā blokā, lai zinātu, kurā failā meklēt.
+
+**Vecais `.doc` un `.ppt` prasa LibreOffice.** Cita ceļa tiem nav. Ja `soffice`
+uz servera nav, tādi pielikumi paliek cilvēkam, un iekšējā blokā stāv tieši tas
+iemesls, ne "nezināms formāts".
+
+### Skenēts rasējums
+
+**Skenēts PDF ir bilde, un bildē teksta nav.** Vienīgais, kas to izlasa, ir
+modelis, kurš attēlu redz. PDF lapu bez teksta slāņa aģents attēlo pats
+(`pypdfium2`, 150 DPI) un kopā ar foto, skenējumiem un ekrānšāviņiem sūta uz
+atsevišķu izsaukumu, kura viss uzdevums ir **pārrakstīt**, ne interpretēt.
+
+Atšifrējums nav oriģināls, un tā visur arī tiek uzskatīts:
+
+- modelim tas aiziet ar lauku `avots`, un sistēmas prompts liek tādu izmēru
+  neuzskatīt par apstiprinātu;
+- menedžeris par katru tādu pielikumu saņem atsevišķu, stiprāku brīdinājumu
+  nekā par nolasītu Excel faili — kļūda atšifrējumā ir tieši izmērā;
+- ja modelis atbild `NAV_TEKSTA` vai izsaukums krīt, pielikums paliek
+  neizlasīts ar godīgu iemeslu. Tukšs izvilkums, kas izliktos par izlasītu,
+  būtu sliktāks par neizlasīšanu vispār: modelis klusētu par pusi pieprasījuma.
+
+Katrs attēls maksā vienu papildu izsaukumu, un vienā vēstulē to ir ne vairāk
+kā pieci: ZIP ar divdesmit skenējumiem citādi kļūtu par divdesmit izsaukumiem
+uz vienu vēstuli. Pārējie paliek menedžerim ar tieši šo iemeslu. Visu ceļu
+izslēdz `ESUPPLIER_ATTACHMENT_VISION=0`.
 
 Pielikuma teksts modelim iet **atsevišķi no vēstules ķermeņa**, savā rāmī.
 Citādi specifikācijas rinda "EPDM 12 mm — 358 gab." lasās kā paša klienta
 rakstīts teikums, arī tad, kad tā bija vecas tāmes aile.
 
 Tāpēc, ka pieprasījums var būt tikai pielikumā, vēstule ar īsu ķermeni
-("Sk. pielikumā") vairs netiek izlaista kā tukša, ja pielikumā teksts ir.
+("Sk. pielikumā") vairs netiek izlaista kā tukša, ja pielikumā ir teksts — vai
+attēls, ko vēl var atšifrēt.
 
 ### Kur paliek iekšējais bloks
 
@@ -338,7 +370,7 @@ visus klienta nosauktos skaitļus, rīks to pasaka `notes` laukā.
 ## Testi un evals
 
 ```bash
-uv run pytest                                    # 408 testi, bez API izsaukumiem
+uv run pytest                                    # 443 testi, bez API izsaukumiem
 uv run evals                                     # visi gadījumi (maksā tokenus)
 uv run evals --case vienkarsais                  # viens
 uv run evals --compare green-7of7.json           # pret iepriekšēju rezultātu
@@ -349,8 +381,9 @@ uv run evals --compare green-7of7.json           # pret iepriekšēju rezultātu
 
 `tests/test_vendor_fencing.py` ir ievestā `commerce-agents` moduļa paša testi,
 mainīts tikai importa ceļš. Tie ir tur tāpēc, ka nākamajā versijas celšanā
-pateiks, vai uzvedība mainījās. `tests/helpers_files.py` ģenerē īstus PDF, DOCX
-un XLSX failus — pielikumu lasīšanu ar izliktiem baitiem pārbaudīt nevar.
+pateiks, vai uzvedība mainījās. `tests/helpers_files.py` ģenerē īstus PDF, DOCX,
+XLSX, PPTX, XLS, RTF, DXF, ZIP un PNG failus — pielikumu lasīšanu ar izliktiem
+baitiem pārbaudīt nevar.
 
 `evals/cases.jsonl` ir gadījumi ar substring pārbaudēm, rīku izsaukumu limitiem
 un LLM-as-judge kritērijiem. Rezultāti krīt `evals/results/`, izejas kods 1, ja
@@ -375,7 +408,8 @@ src/esupplier/
     run.py            pastkastītes gājiens: vēstule → melnraksts
     imap.py           savienojums, mapes, APPEND
     message.py        MIME → teksts; citāti, paraksti, filtri
-    attachments.py    pielikums → teksts (PDF, Word, Excel, CSV)
+    attachments.py    pielikums → teksts (PDF, Office, RTF, DXF, arhīvi)
+    vision.py         attēls → teksts: skenēts rasējums, foto, PDF bez teksta
     draft.py          vēstule → MIME melnraksts ar ķēdes galvenēm
   catalog/
     sync.py           Store API / scrape → SQLite
@@ -413,6 +447,13 @@ atbildes/*.html       sagatavotās vēstules
 | `ESUPPLIER_ATTACHMENT_CHARS` | `4000` | cik zīmju no viena pielikuma aiziet modelim |
 | `ESUPPLIER_ATTACHMENTS_CHARS` | `12000` | cik zīmju kopā no visiem pielikumiem |
 | `ESUPPLIER_ATTACHMENT_PDF_PAGES` | `20` | cik PDF lapu lasām |
+| `ESUPPLIER_ARCHIVE_MAX_FILES` | `12` | cik failu atveram no viena arhīva |
+| `ESUPPLIER_SOFFICE` | — | LibreOffice ceļš vecajam `.doc`; tukšs = meklējam PATH |
+| `ESUPPLIER_ATTACHMENT_VISION` | `1` | `0` izslēdz attēlu atšifrēšanu |
+| `ESUPPLIER_VISION_MODEL` | = `ESUPPLIER_MODEL` | modelis, kas redz attēlus |
+| `ESUPPLIER_VISION_PAGES` | `5` | cik PDF lapu attēlojam un sūtām |
+| `ESUPPLIER_VISION_DPI` | `150` | izšķirtspēja, ar kādu attēlojam lapu |
+| `ESUPPLIER_VISION_MAX_FILES` | `5` | cik attēlu vienā vēstulē atšifrējam |
 
 ## Zināmās robežas
 

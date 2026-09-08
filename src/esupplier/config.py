@@ -94,6 +94,40 @@ MAIL_ATTACHMENT_TEXT_LIMIT = int(os.getenv("ESUPPLIER_ATTACHMENT_CHARS") or 4000
 MAIL_ATTACHMENTS_TEXT_LIMIT = int(os.getenv("ESUPPLIER_ATTACHMENTS_CHARS") or 12000)
 #: Cik PDF lapu lasām. Pieprasījums ir pirmajās; tālāk sākas tipveida noteikumi.
 MAIL_ATTACHMENT_PDF_PAGES = int(os.getenv("ESUPPLIER_ATTACHMENT_PDF_PAGES") or 20)
+#: Cik failu atveram no viena arhīva. Rasējumu ZIP mēdz būt ar simtiem lapu, un
+#: pieprasījums ir pirmajās; pārējie tikai izspiestu vēstuli no konteksta.
+MAIL_ARCHIVE_MAX_FILES = int(os.getenv("ESUPPLIER_ARCHIVE_MAX_FILES") or 12)
+#: LibreOffice vecajiem binārajiem formātiem (`.doc`, `.xls`, `.ppt`). Tukšs =
+#: meklējam `soffice` PATH. Ja tā nav, tādi pielikumi paliek cilvēkam.
+SOFFICE_BIN = os.getenv("ESUPPLIER_SOFFICE") or ""
+#: Cik ilgi gaidām vienu LibreOffice konvertāciju.
+SOFFICE_TIMEOUT_S = int(os.getenv("ESUPPLIER_SOFFICE_TIMEOUT") or 60)
+
+# --- Attēlu atšifrēšana ---------------------------------------------------
+# Skenēts rasējums un telefonā nofotografēta specifikācija teksta slāni nesatur.
+# Vienīgais, kas tos izlasa, ir modelis, kurš redz attēlu. Atšifrējums NAV
+# oriģināls: tas aiziet modelim atzīmēts kā atšifrējums, un menedžeris par to
+# saņem atsevišķu brīdinājumu.
+MAIL_ATTACHMENT_VISION = (
+    os.getenv("ESUPPLIER_ATTACHMENT_VISION") or "1"
+).strip().lower() not in ("0", "false", "no")
+#: Modelis, kas redz attēlus. Tukšs = tas pats, kas raksta vēstuli.
+VISION_MODEL = os.getenv("ESUPPLIER_VISION_MODEL") or MODEL
+#: Cik PDF lapu attēlojam un sūtām modelim, kad teksta slāņa nav. Rasējums
+#: parasti ir viena lapa; pieci ir rezerve daudzlapu specifikācijai.
+MAIL_ATTACHMENT_VISION_PAGES = int(os.getenv("ESUPPLIER_VISION_PAGES") or 5)
+#: Cik lielu attēlu vispār sūtām. Lielāku pirms tam samazina `pypdfium2`
+#: nevar — tas ir tikai PDF ceļš —, tāpēc telefona foto virs šī paliek cilvēkam.
+MAIL_ATTACHMENT_VISION_MAX_BYTES = int(os.getenv("ESUPPLIER_VISION_MAX_BYTES") or 8_000_000)
+#: Ar kādu izšķirtspēju attēlojam PDF lapu. 150 DPI ir robeža, aiz kuras
+#: rasējuma izmēru atzīmes vairs nesalasās.
+MAIL_ATTACHMENT_VISION_DPI = int(os.getenv("ESUPPLIER_VISION_DPI") or 150)
+#: Cik zīmju paturam no viena attēla atšifrējuma.
+MAIL_ATTACHMENT_VISION_CHARS = int(os.getenv("ESUPPLIER_VISION_CHARS") or 4000)
+#: Cik attēlu vienā vēstulē atšifrējam. Katrs maksā savu izsaukumu, un ZIP ar
+#: divdesmit skenējumiem citādi kļūtu par divdesmit izsaukumiem uz vienu
+#: vēstuli. Pārējie paliek menedžerim ar tieši šo iemeslu.
+MAIL_ATTACHMENT_VISION_MAX_FILES = int(os.getenv("ESUPPLIER_VISION_MAX_FILES") or 5)
 
 
 # --- Cenas izmaksu aprēķinam ---------------------------------------------

@@ -91,8 +91,28 @@ class Incoming:
 
     @property
     def unread_attachments(self) -> list[Attachment]:
-        """Pielikumi, kas paliek cilvēkam: skenēti rasējumi, CAD, arhīvi."""
+        """Pielikumi, kas paliek cilvēkam: CAD, parolēti faili, tukšie arhīvi."""
         return [item for item in self.attachments if not item.read]
+
+    @property
+    def transcribed_attachments(self) -> list[Attachment]:
+        """Pielikumi, kuru tekstu modelis nolasīja no attēla, ne no faila."""
+        return [item for item in self.attachments if item.transcribed]
+
+    @property
+    def has_attachment_content(self) -> bool:
+        """Vai pielikumos ir pieprasījums — jau izlasīts vai vēl atšifrējams.
+
+        `can_transcribe` te skaitās līdzvērtīgi izlasītam: atšifrēšana notiek
+        vēlāk, jau ar modeli, un vēstule "Labdien, skat. pielikumā" ar skenētu
+        rasējumu nedrīkst nokrist kā tukša pirms tam, kad rasējumu kāds atvēra.
+        """
+        return any(item.read or item.can_transcribe for item in self.attachments)
+
+    @property
+    def has_content(self) -> bool:
+        """Vai vēstulē vispār ir pieprasījums — ķermenī vai pielikumā."""
+        return bool(self.body.strip()) or self.has_attachment_content
 
 
 def _part_text(part: EmailMessage) -> str:
@@ -240,7 +260,19 @@ def attachments_prompt(attachments: list[Attachment]) -> str:
         return ""
 
     payload: dict[str, list[dict[str, str]]] = {}
-    read = [{"nosaukums": item.name, "teksts": item.text} for item in attachments if item.read]
+    read = []
+    for item in attachments:
+        if not item.read:
+            continue
+        entry = {"nosaukums": item.name, "teksts": item.text}
+        if item.transcribed:
+            # Atšifrējums nav oriģināls. Modelim tas jāzina tāpat kā menedžerim:
+            # no rasējuma nolasīts "12 mm" var būt "1,2 mm", un tad precizējošs
+            # jautājums klientam ir vērtīgāks par pārliecinātu piedāvājumu.
+            entry["avots"] = (
+                "attēla atšifrējums — teksts nolasīts no bildes, izmēri var būt neprecīzi"
+            )
+        read.append(entry)
     unread = [
         {"nosaukums": item.name, "iemesls": item.note or "nezināms formāts"}
         for item in attachments

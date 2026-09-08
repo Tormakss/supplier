@@ -6,6 +6,7 @@ tieši parsēšana ir tā vieta, kur pielikumu lasīšana var klusi salūzt.
 
 from __future__ import annotations
 
+import struct
 import zipfile
 from io import BytesIO
 
@@ -109,4 +110,83 @@ def make_xlsx(rows: list[list[object]], sheet_name: str = "Specifikācija") -> b
             f'<sst xmlns="{_SHEET_NS}" count="{len(shared)}">{strings}</sst>',
         )
         archive.writestr("xl/worksheets/sheet1.xml", sheet)
+    return buffer.getvalue()
+
+
+_DRAW_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PRES_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+
+def make_pptx(slides: list[list[str]]) -> bytes:
+    """Katrs saraksts ir viens slaids ar rindkopām."""
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("ppt/presentation.xml", f'<presentation xmlns:p="{_PRES_NS}"/>')
+        for number, lines in enumerate(slides, start=1):
+            paragraphs = "".join(
+                f"<a:p><a:r><a:t>{line}</a:t></a:r></a:p>" for line in lines
+            )
+            archive.writestr(
+                f"ppt/slides/slide{number}.xml",
+                f'<p:sld xmlns:p="{_PRES_NS}" xmlns:a="{_DRAW_NS}">'
+                f"<p:cSld><p:spTree>{paragraphs}</p:spTree></p:cSld></p:sld>",
+            )
+    return buffer.getvalue()
+
+
+def _biff_record(kind: int, payload: bytes) -> bytes:
+    return struct.pack("<HH", kind, len(payload)) + payload
+
+
+def make_xls(rows: list[list[object]]) -> bytes:
+    """Vecais binārais Excel (BIFF2). Tāds nāk no grāmatvedības programmām,
+    un `xlrd` to lasa tāpat kā īstu failu no klienta."""
+    out = bytearray()
+    out += _biff_record(0x0009, struct.pack("<HH", 2, 0x0010))  # BOF, worksheet
+    out += _biff_record(0x0042, struct.pack("<H", 0x04E4))  # CODEPAGE cp1252
+    for row_number, row in enumerate(rows):
+        for column, value in enumerate(row):
+            head = struct.pack("<HH", row_number, column) + b"\x00\x00\x00"
+            if isinstance(value, (int, float)):
+                out += _biff_record(0x0003, head + struct.pack("<d", float(value)))
+            else:
+                encoded = str(value).encode("cp1252")
+                out += _biff_record(0x0004, head + bytes([len(encoded)]) + encoded)
+    out += _biff_record(0x000A, b"")  # EOF
+    return bytes(out)
+
+
+def make_zip(files: list[tuple[str, bytes]]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in files:
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def make_dxf(labels: list[str]) -> bytes:
+    """ASCII DXF ar TEXT entītijām un vienu koordinātu pāri katrai."""
+    lines = ["0", "SECTION", "2", "ENTITIES"]
+    for label in labels:
+        lines += ["0", "TEXT", "8", "0", "10", "125.5", "20", "40.0", "1", label]
+    lines += ["0", "ENDSEC", "0", "EOF"]
+    return ("\n".join(lines) + "\n").encode("cp1252")
+
+
+def make_rtf(paragraphs: list[str]) -> bytes:
+    body = "".join(f"{text}\\par\n" for text in paragraphs)
+    return (
+        r"{\rtf1\ansi\deff0{\fonttbl{\f0\fnil Arial;}}"
+        r"{\*\generator Riched20 10.0;}"
+        "\\viewkind4\\uc1\\pard\\f0\\fs22 " + body + "}"
+    ).encode("cp1252")
+
+
+def make_png(size: tuple[int, int] = (40, 30), colour: str = "white") -> bytes:
+    """Īsts PNG. Pillow ir projekta atkarība, tāpēc izliktu baitu te nevajag."""
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format="PNG")
     return buffer.getvalue()
