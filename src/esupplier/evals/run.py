@@ -20,7 +20,7 @@ from rich.console import Console
 
 from ..agent.loop import build_client, run_turn
 from ..catalog import db
-from ..config import CACHED_INPUT_DISCOUNT, MODEL, PRICING
+from ..config import ACTIVE_MODEL, CACHED_INPUT_DISCOUNT, ENGINE, PRICING
 from .cases import RESULTS_DIR, Case, Check, evaluate, load_cases
 from .judge import judge_answer
 
@@ -78,7 +78,7 @@ def run_case(case: Case, client: Any, conn: Any) -> dict[str, Any]:
         "cached_tokens": result.cached_tokens,
         "output_tokens": total_out,
         "total_tokens": total_in + total_out,
-        "cost_usd": estimate_cost(MODEL, total_in, result.cached_tokens, total_out),
+        "cost_usd": estimate_cost(ACTIVE_MODEL, total_in, result.cached_tokens, total_out),
     }
 
 
@@ -108,7 +108,7 @@ def summarise(console: Console, rows: list[dict[str, Any]]) -> None:
     if costs:
         line += f" · ~${sum(costs) / len(costs):.4f}/gadījums"
     else:
-        line += f" · izmaksas: n/a ([dim]{MODEL} nav PRICING sarakstā[/dim])"
+        line += f" · izmaksas: n/a ([dim]{ACTIVE_MODEL} nav PRICING sarakstā[/dim])"
     console.print()
     console.print(line)
 
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         cases = [c for c in cases if c.id in wanted]
 
-    console.print(f"[dim]Modelis: {MODEL} · {len(cases)} gadījumi[/dim]")
+    console.print(f"[dim]Dzinējs: {ENGINE} · modelis: {ACTIVE_MODEL} · {len(cases)} gadījumi[/dim]")
     console.print()
 
     started = time.monotonic()
@@ -181,7 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     summarise(console, rows)
 
     payload = {
-        "model": MODEL,
+        "model": ACTIVE_MODEL,
+        "engine": ENGINE,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "duration_s": round(time.monotonic() - started, 1),
         "passed": sum(1 for r in rows if r["passed"]),

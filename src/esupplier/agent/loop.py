@@ -17,6 +17,7 @@ from openai import OpenAI, OpenAIError
 from ..catalog import db
 from ..config import (
     ENGINE,
+    KNOWN_ENGINES,
     MAX_TOKENS,
     MAX_TOOL_ITERATIONS,
     MODEL,
@@ -28,6 +29,12 @@ from .prompts import SYSTEM_PROMPT
 from .tools import TOOLS, ToolCall, execute_tool
 
 CONTACT_HINT = "Pamēģini pārformulēt jautājumu vai pārbaudi savienojumu."
+_UNKNOWN_ENGINE = (
+    f"Nezināms ESUPPLIER_ENGINE=\"{ENGINE}\". Der: "
+    "`anthropic` (Claude API ar ANTHROPIC_API_KEY), "
+    "`openai` (ChatGPT ar OPENAI_API_KEY) vai "
+    "`claude` (Claude Agent SDK no abonementa)."
+)
 #: Cik gara paliek IEPRIEKŠĒJO gājienu rīku atbilde, kad tā jāpārsūta vēlreiz.
 HISTORY_OUTPUT_LIMIT = 700
 
@@ -58,13 +65,20 @@ class AgentResult:
         return self.input_tokens + self.output_tokens
 
 
-def build_client() -> OpenAI | None:
-    """Klients modelim. `claude` dzinējam tāda nav: Agent SDK atslēgu neprasa.
+def build_client() -> Any:
+    """Klients tam dzinējam, kas ieslēgts.
 
-    `None` nav izlaidums: ar abonementu pārbaudāmās atslēgas vienkārši nav.
+    `claude` dzinējam klienta nav, un `None` te nav izlaidums: Agent SDK iet no
+    abonementa, un pārbaudāmās atslēgas vienkārši nav.
     """
+    if ENGINE not in KNOWN_ENGINES:
+        raise RuntimeError(_UNKNOWN_ENGINE)
     if ENGINE == "claude":
         return None
+    if ENGINE == "anthropic":
+        from .anthropic_loop import build_client as anthropic_client
+
+        return anthropic_client()
     if not OPENAI_API_KEY:
         raise RuntimeError(
             "Trūkst OPENAI_API_KEY. Nokopē .env.example uz .env un ieliec atslēgu."
@@ -132,6 +146,15 @@ def run_turn(
         from .claude_loop import run_turn as claude_run_turn
 
         return claude_run_turn(messages, max_iterations, conn=conn)
+    if ENGINE == "anthropic":
+        from .anthropic_loop import run_turn as anthropic_run_turn
+
+        return anthropic_run_turn(messages, max_iterations, conn=conn, client=client)
+    if ENGINE != "openai":
+        result = AgentResult()
+        result.text = _UNKNOWN_ENGINE
+        result.status = "error"
+        return result
     return run_turn_openai(messages, max_iterations, conn=conn, client=client)
 
 

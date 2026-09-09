@@ -202,20 +202,53 @@ def test_only_a_few_images_per_letter_are_transcribed(monkeypatch) -> None:
 
 
 def test_engine_decides_who_transcribes(monkeypatch) -> None:
-    """Viens `transcribe`, divi dzinēji. Ja izvēle nokļūtu izsaukuma vietā,
+    """Viens `transcribe`, trīs dzinēji. Ja izvēle nokļūtu izsaukuma vietā,
     `mail/run.py` sāktu zināt, kurš modelis tur ir zem apakšas."""
     seen: list[str] = []
     monkeypatch.setattr(vision, "_ask_claude", lambda images: seen.append("claude") or "teksts")
     monkeypatch.setattr(
         vision, "_ask_openai", lambda client, images: seen.append("openai") or "teksts"
     )
+    monkeypatch.setattr(
+        vision, "_ask_anthropic", lambda client, images: seen.append("anthropic") or "teksts"
+    )
 
     monkeypatch.setattr(vision, "ENGINE", "claude")
     vision.transcribe([scan()], client=None)
+    monkeypatch.setattr(vision, "ENGINE", "anthropic")
+    vision.transcribe([scan()], FakeClient())
     monkeypatch.setattr(vision, "ENGINE", "openai")
     vision.transcribe([scan()], FakeClient())
 
-    assert seen == ["claude", "openai"]
+    assert seen == ["claude", "anthropic", "openai"]
+
+
+def test_anthropic_transcription_sends_the_image_without_tools(monkeypatch) -> None:
+    """Attēla saturu izvēlējās svešs cilvēks, tāpēc atšifrēšanas izsaukumam
+    rīku būt nedrīkst."""
+    from types import SimpleNamespace
+
+    sent: dict = {}
+
+    class Client:
+        def __init__(self) -> None:
+            self.messages = SimpleNamespace(create=self._create)
+
+        def _create(self, **kwargs):
+            sent.update(kwargs)
+            block = SimpleNamespace(type="text", text="EPDM 12 mm, 358 gab.")
+            return SimpleNamespace(content=[block])
+
+    monkeypatch.setattr(vision, "ENGINE", "anthropic")
+    item = scan()
+    vision.transcribe([item], Client())
+
+    assert item.transcribed
+    assert item.text == "EPDM 12 mm, 358 gab."
+    assert "tools" not in sent
+    blocks = sent["messages"][0]["content"]
+    assert blocks[0]["type"] == "image"
+    assert blocks[-1]["text"] == vision.PROMPT
 
 
 def test_claude_path_needs_no_client() -> None:

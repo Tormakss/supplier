@@ -201,9 +201,39 @@ def _ask_claude(images: list[tuple[bytes, str]]) -> str:
     return asyncio.run(_run())
 
 
+def _ask_anthropic(client: Any, images: list[tuple[bytes, str]]) -> str:
+    """Tas pats uzdevums caur Claude API.
+
+    Rīku šeit nav un nedrīkst būt: attēla saturu izvēlējās svešs cilvēks.
+    """
+    content: list[dict[str, Any]] = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(data).decode("ascii"),
+            },
+        }
+        for data, mime in images
+    ]
+    content.append({"type": "text", "text": PROMPT})
+    response = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4000,
+        messages=[{"role": "user", "content": content}],
+    )
+    return "\n".join(
+        block.text for block in response.content
+        if getattr(block, "type", None) == "text" and getattr(block, "text", "")
+    ).strip()
+
+
 def _ask(client: Any, images: list[tuple[bytes, str]]) -> str:
     if ENGINE == "claude":
         return _ask_claude(images)
+    if ENGINE == "anthropic":
+        return _ask_anthropic(client, images)
     return _ask_openai(client, images)
 
 

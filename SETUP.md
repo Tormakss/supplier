@@ -16,8 +16,19 @@ Noklusējuma dzinējs ir `claude`: aģents iet caur Claude Agent SDK un maksā n
 abonementa, tāpēc API atslēga nav vajadzīga. Jābūt tikai uzstādītam un
 pieteiktam Claude Code.
 
-Ja gribi veco ceļu caur OpenAI, `.env` liec `ESUPPLIER_ENGINE=openai` un
-[OpenAI atslēgu](https://platform.openai.com/api-keys).
+Ja gribi maksāt ar API atslēgu, nevis abonementu, izvēlies vienu no diviem:
+
+```
+ESUPPLIER_ENGINE=anthropic      # Claude API
+ANTHROPIC_API_KEY=sk-ant-...    # console.anthropic.com/settings/keys
+```
+
+```
+ESUPPLIER_ENGINE=openai         # ChatGPT
+OPENAI_API_KEY=sk-proj-...      # platform.openai.com/api-keys
+```
+
+Uz servera un cron darbam der tieši šie divi: Claude Code tur nav jāuzstāda.
 
 Python versiju `uv` uzstādīs pats, ja tās nav — `.python-version` prasa 3.12.
 
@@ -60,7 +71,12 @@ $EDITOR .env
 ```
 
 Ar noklusējuma dzinēju (`claude`) obligātu mainīgo **nav**: modelis nāk no
-abonementa. `openai` dzinējam obligāts ir viens:
+abonementa. Abiem API dzinējiem obligāta ir atslēga:
+
+```
+ESUPPLIER_ENGINE=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
 
 ```
 ESUPPLIER_ENGINE=openai
@@ -71,8 +87,9 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 
 | Mainīgais | Noklusējums | Kad aiztikt |
 |---|---|---|
-| `ESUPPLIER_ENGINE` | `claude` | `openai`, ja abonementa ceļš neder |
-| `ESUPPLIER_CLAUDE_MODEL` | `claude-opus-5` | cits modelis abonementa ceļā |
+| `ESUPPLIER_ENGINE` | `claude` | `anthropic` vai `openai`, ja gribi maksāt ar atslēgu |
+| `ANTHROPIC_API_KEY` | — | obligāts `anthropic` dzinējam |
+| `ESUPPLIER_CLAUDE_MODEL` | `claude-opus-5` | cits Claude modelis |
 | `ESUPPLIER_MODEL` | `gpt-5.6-luna` | `openai` dzinējam, ja kontam šis nav pieejams |
 | `ESUPPLIER_EFFORT` | `medium` | `minimal` ir lētāk, bet retāk ķeras pie rīkiem |
 | `ESUPPLIER_DB` | `data/catalog.db` | cits kataloga ceļš |
@@ -259,7 +276,8 @@ atbildes/piedavajums-20260904-081712-IEKSEJI.txt   <- kas jāizdara ar roku
 
 **`Neatradu Claude Code.`** Noklusējuma dzinējs iet caur Claude Agent SDK, un
 tam vajag uzstādītu un pieteiktu Claude Code (`claude --version`). Vai arī liec
-`.env` failā `ESUPPLIER_ENGINE=openai` un OpenAI atslēgu.
+`.env` failā `ESUPPLIER_ENGINE=anthropic` un Claude API atslēgu (vai
+`ESUPPLIER_ENGINE=openai` un OpenAI atslēgu).
 
 **`Trūkst OPENAI_API_KEY. Nokopē .env.example uz .env un ieliec atslēgu.`**
 `ESUPPLIER_ENGINE=openai`, bet `.env` nav vai atslēga tukša. Fails jābūt

@@ -101,19 +101,27 @@ uv run mcp-katalogs      # stdio; klusē, līdz klients kaut ko pajautā
 
 ## Dzinēji
 
-Divi ceļi pie modeļa, viena uzvedība. Izvēli nosaka `ESUPPLIER_ENGINE`.
+Trīs ceļi pie modeļa, viena uzvedība. Izvēli nosaka `ESUPPLIER_ENGINE`.
 
-| Dzinējs | Kas notiek | Ko maksā |
-|---|---|---|
-| `claude` (noklusējums) | Claude Agent SDK, tas ir, tas pats Claude Code kā bibliotēka | abonements |
-| `openai` | Responses API ar `OPENAI_API_KEY` | atslēgas konts |
+| Dzinējs | Kas notiek | Atslēga | Ko maksā |
+|---|---|---|---|
+| `anthropic` | Claude API (Messages API) | `ANTHROPIC_API_KEY` | atslēgas konts |
+| `openai` | ChatGPT (Responses API) | `OPENAI_API_KEY` | atslēgas konts |
+| `claude` (noklusējums) | Claude Agent SDK, tas pats Claude Code kā bibliotēka | nav | abonements |
 
-`claude` dzinējam **API atslēga nav vajadzīga**; vajadzīgs ir uzstādīts un
-pieteikts Claude Code. Modeli maina `ESUPPLIER_CLAUDE_MODEL`, noklusējums
-`claude-opus-5`.
+Aliasi: `claude-api` = `anthropic`, `chatgpt` = `openai`. Nezināma vērtība
+neaiziet klusi uz ChatGPT — programma pasaka, ka nesaprot, un nosauc derīgās.
+Bez tā `antropic` bez `h` maksātu no svešas atslēgas.
+
+Serverim un cron darbam der `anthropic` vai `openai`: tiem vajag tikai atslēgu.
+`claude` prasa uzstādītu un pieteiktu Claude Code uz tās pašas mašīnas.
+
+Claude modeli abiem Claude ceļiem nosaka `ESUPPLIER_CLAUDE_MODEL`, noklusējums
+`claude-opus-5`. `ESUPPLIER_EFFORT` OpenAI pusē ir `reasoning.effort`, Claude
+API pusē — domāšanas budžets tokenos (`low` 2000, `medium` 4000, `high` 8000).
 
 Zars ir vienā vietā, `loop.run_turn` iekšā. `mail/run.py`, `cli.py` un evali par
-dzinējiem neko nezina, un tā tam jāpaliek: divi ceļi ar vienu uzvedību ir
+dzinējiem neko nezina, un tā tam jāpaliek: trīs ceļi ar vienu uzvedību ir
 vērtīgi tikai tik ilgi, kamēr izsaukuma puse ir viena.
 
 Kataloga rīki `claude` dzinējā iet **procesa iekšienē** (`create_sdk_mcp_server`),
@@ -465,7 +473,8 @@ src/esupplier/
   agent/
     prompts.py        sistēmas prompts (nozares zināšanas + atbildes formāts)
     tools.py          rīku definīcijas un izpilde
-    loop.py           dzinēja izvēle + OpenAI cikls: modelis → rīki → modelis
+    loop.py           dzinēja izvēle + ChatGPT cikls: modelis → rīki → modelis
+    anthropic_loop.py tas pats cikls caur Claude API (ANTHROPIC_API_KEY)
     claude_loop.py    tas pats cikls caur Claude Agent SDK (abonements)
   mail/
     run.py            pastkastītes gājiens: vēstule → melnraksts
@@ -493,8 +502,9 @@ atbildes/*.html       sagatavotās vēstules
 
 | Mainīgais | Noklusējums | Ko dara |
 |---|---|---|
-| `ESUPPLIER_ENGINE` | `claude` | `claude` = abonements, `openai` = atslēga |
-| `ESUPPLIER_CLAUDE_MODEL` | `claude-opus-5` | modelis `claude` dzinējam |
+| `ESUPPLIER_ENGINE` | `claude` | `anthropic` = Claude API, `openai` = ChatGPT, `claude` = abonements |
+| `ANTHROPIC_API_KEY` | — | obligāts tikai `anthropic` dzinējam |
+| `ESUPPLIER_CLAUDE_MODEL` | `claude-opus-5` | modelis `anthropic` un `claude` dzinējiem |
 | `OPENAI_API_KEY` | — | obligāts tikai `openai` dzinējam |
 | `ESUPPLIER_MODEL` | `gpt-5.6-luna` | modelis `openai` dzinējam |
 | `ESUPPLIER_EFFORT` | `medium` | domāšanas dziļums; ar `minimal` retāk ķeras pie rīkiem |

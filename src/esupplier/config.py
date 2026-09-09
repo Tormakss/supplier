@@ -31,16 +31,39 @@ SCRAPE_DELAY_S = 0.7
 VAT_RATE = 0.21
 
 # --- Dzinējs --------------------------------------------------------------
-# `claude` = Claude Agent SDK, maksā no abonementa, API atslēga nav vajadzīga.
-# `openai` = Responses API ar savu atslēgu; paliek salīdzināšanai.
-ENGINE = (os.getenv("ESUPPLIER_ENGINE") or "claude").strip().lower()
+# Trīs ceļi pie modeļa, viena uzvedība:
+#   `anthropic` — Claude API ar ANTHROPIC_API_KEY.
+#   `openai`    — ChatGPT (Responses API) ar OPENAI_API_KEY.
+#   `claude`    — Claude Agent SDK; maksā no abonementa, atslēga nav vajadzīga,
+#                 bet prasa uzstādītu un pieteiktu Claude Code.
+_ENGINE_ALIASES = {
+    "claude-api": "anthropic",
+    "claude_api": "anthropic",
+    "chatgpt": "openai",
+    "sdk": "claude",
+}
+_engine_raw = (os.getenv("ESUPPLIER_ENGINE") or "claude").strip().lower()
+ENGINE = _ENGINE_ALIASES.get(_engine_raw, _engine_raw)
+#: Dzinēji, kas iet caur API atslēgu. `claude` te NAV: tam atslēgas nav.
+API_ENGINES = ("anthropic", "openai")
+#: Nezināmu vērtību NEPIEŅEMAM klusi: `antropic` bez `h` citādi aizietu uz
+#: ChatGPT, un cilvēks maksātu svešai atslēgai, domādams, ka izvēlējās Claude.
+KNOWN_ENGINES = ("claude", "anthropic", "openai")
 
 # --- Modelis --------------------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 MODEL = os.getenv("ESUPPLIER_MODEL") or "gpt-5.6-luna"
 #: Atsevišķs no `MODEL`: viens lauks abiem nozīmētu, ka dzinēja maiņa klusi
-#: paņem otram neesošu modeli.
+#: paņem otram neesošu modeli. Kopīgs `anthropic` un `claude` dzinējiem —
+#: modeļa nosaukums abos ir viens un tas pats.
 CLAUDE_MODEL = os.getenv("ESUPPLIER_CLAUDE_MODEL") or "claude-opus-5"
+#: Modelis, ko tiešām lieto ieslēgtais dzinējs. Bez šī evals rāda `MODEL` arī
+#: tad, kad atbildi rakstīja Claude, un izmaksas tiek rēķinātas pēc svešas cenas.
+ACTIVE_MODEL = MODEL if ENGINE == "openai" else CLAUDE_MODEL
+#: Cik tokenu Claude API drīkst notērēt domāšanai. Jāpaliek zem `MAX_TOKENS`,
+#: citādi atbildei vietas nepaliek; `0` domāšanu izslēdz.
+THINKING_BUDGET = {"low": 2000, "medium": 4000, "high": 8000, "xhigh": 10000, "max": 10000}
 # `max_completion_tokens` ierobežo domāšanu UN atbildi kopā. Ar 8000 pietrūka
 # tieši atbildes BEIGĀM, t.i. iekšējam blokam.
 MAX_TOKENS = 16000

@@ -49,7 +49,8 @@ CONTACT_HINT = "Pamēģini pārformulēt jautājumu vai pārbaudi savienojumu."
 
 _MISSING_CLI = (
     "Neatradu Claude Code. `claude` dzinējam tas ir jāuzstāda un jāpiesakās "
-    "(`npm i -g @anthropic-ai/claude-code`, tad `claude`). Citādi liec "
+    "(`npm i -g @anthropic-ai/claude-code`, tad `claude`). Ja Claude Code nav, "
+    "liec ESUPPLIER_ENGINE=anthropic (Claude API ar atslēgu) vai "
     "ESUPPLIER_ENGINE=openai."
 )
 
