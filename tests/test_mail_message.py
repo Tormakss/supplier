@@ -20,6 +20,7 @@ from esupplier.mail.message import (
     parse_message,
     skip_reason,
 )
+from esupplier.mail import message as message_mod
 from esupplier.fences import ATTACHMENT_FENCE, LETTER_FENCE
 from helpers_files import make_docx, make_empty_pdf, make_xlsx
 
@@ -320,3 +321,68 @@ def test_reply_to_wins_over_from() -> None:
 
 def test_without_reply_to_we_answer_the_sender() -> None:
     assert parse_message(build()).recipient == "janis@klients.lv"
+
+
+# --- masveida izsūtnes -----------------------------------------------------
+def test_esp_headers_are_filtered_before_the_model() -> None:
+    """Temu reklāmā nav ne `List-Id`, ne `List-Unsubscribe`, tāpēc vecais
+    filtrs to laida cauri: 130 vēstules vienā pastkastītē, katra par pilnu
+    aģenta ciklu."""
+    for header in ("Feedback-ID", "X-MSFBL", "X-SG-EID", "X-Mailgun-Sending-IP"):
+        raw = build(body="Discount card sent! Your cart has a price drop!",
+                    headers={header: "abc123"})
+        mime = BytesParser(policy=policy.default).parsebytes(raw)
+        assert skip_reason(mime, parse_message(raw).body).startswith("automātiska vēstule")
+
+
+def test_bounce_return_path_is_a_bulk_sender() -> None:
+    """Masveida rīki katrai vēstulei liek savu atgriešanas adresi. Klienta
+    vēstulē `Return-Path` sakrīt ar sūtītāju."""
+    raw = build(body="Your cart has seen a price drop!", headers={
+        "Return-Path": "<msprvs1=20622BKE6snSN=bounces-23732@mb.account.temu.com>"
+    })
+    mime = BytesParser(policy=policy.default).parsebytes(raw)
+    assert skip_reason(mime, parse_message(raw).body) == "masveida izsūtne (bounce adrese)"
+
+
+def test_normal_return_path_passes() -> None:
+    raw = build(body="Labdien, vajag EPDM profilu 12 mm ar pašlīmi.", headers={
+        "Return-Path": "<janis@klients.lv>"
+    })
+    mime = BytesParser(policy=policy.default).parsebytes(raw)
+    assert skip_reason(mime, parse_message(raw).body) == ""
+
+
+def test_noreply_with_a_suffix_is_caught() -> None:
+    """`noreply-lv@omniva.lv` vecajā rakstā neiekrita: regex prasīja `@` uzreiz
+    aiz `reply`, un uz automātisko atbildi aizgāja pilns aģenta cikls."""
+    for address in ("noreply-lv@omniva.lv", "no-reply2@piegade.lv", "noreply.info@x.lv"):
+        raw = build(body="Automatic Reply - API", sender=address)
+        mime = BytesParser(policy=policy.default).parsebytes(raw)
+        assert skip_reason(mime, parse_message(raw).body) == "sūtītājs neatbild (no-reply)"
+
+
+def test_plain_reply_address_is_not_a_noreply() -> None:
+    raw = build(body="Labdien, vajag EPDM profilu 12 mm.", sender="reply@klients.lv")
+    mime = BytesParser(policy=policy.default).parsebytes(raw)
+    assert skip_reason(mime, parse_message(raw).body) == ""
+
+
+def test_ignore_list_stops_our_own_systems(monkeypatch) -> None:
+    """Veikala pasūtījumu paziņojums nāk no īstas adreses un nevienā izsūtņu
+    filtrā neiekrīt, bet tas nav klienta pieprasījums."""
+    monkeypatch.setattr(message_mod, "MAIL_IGNORE_SENDERS", ("orders@ordonoctis.com",))
+    raw = build(body="New order — ON-2026-0003 · 216.00 EUR", sender="orders@ordonoctis.com")
+    mime = BytesParser(policy=policy.default).parsebytes(raw)
+    assert "ESUPPLIER_IMAP_IGNORE" in skip_reason(mime, parse_message(raw).body)
+
+
+def test_ignore_list_accepts_a_whole_domain(monkeypatch) -> None:
+    monkeypatch.setattr(message_mod, "MAIL_IGNORE_SENDERS", ("@ordonoctis.com",))
+    assert message_mod.ignored_sender("orders@ordonoctis.com") == "@ordonoctis.com"
+    assert message_mod.ignored_sender("janis@klients.lv") == ""
+
+
+def test_empty_ignore_list_blocks_nobody(monkeypatch) -> None:
+    monkeypatch.setattr(message_mod, "MAIL_IGNORE_SENDERS", ())
+    assert message_mod.ignored_sender("orders@ordonoctis.com") == ""

@@ -516,6 +516,7 @@ atbildes/*.html       sagatavotās vēstules
 | `ESUPPLIER_IMAP_PORT` | `993` | IMAPS; ar `_SSL=0` STARTTLS uz 143 |
 | `ESUPPLIER_IMAP_FOLDER` | `INBOX` | ko lasīt |
 | `ESUPPLIER_IMAP_DRAFTS` | — | melnrakstu mape; tukšs = atrodam paši |
+| `ESUPPLIER_IMAP_IGNORE` | — | adreses/domēni, uz kuriem neatbildam nekad, ar komatu |
 | `ESUPPLIER_MAIL_BATCH` | `10` | cik vēstules vienā gājienā |
 | `ESUPPLIER_MAIL_POLL` | `60` | pauze sekundēs starp pārbaudēm |
 | `ESUPPLIER_ATTACHMENT_MAX_BYTES` | `10000000` | lielāku pielikumu neatveram |

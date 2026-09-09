@@ -94,6 +94,7 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 | `ESUPPLIER_EFFORT` | `medium` | `minimal` ir lētāk, bet retāk ķeras pie rīkiem |
 | `ESUPPLIER_DB` | `data/catalog.db` | cits kataloga ceļš |
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt sagatavotās vēstules |
+| `ESUPPLIER_IMAP_IGNORE` | — | adreses/domēni, uz kuriem neatbildam nekad, ar komatu |
 | `ESUPPLIER_ATTACHMENT_CHARS` | `4000` | cik zīmju no viena pielikuma aiziet modelim |
 | `ESUPPLIER_ATTACHMENTS_CHARS` | `12000` | cik zīmju kopā no visiem pielikumiem |
 | `ESUPPLIER_ATTACHMENT_VISION` | `1` | `0` izslēdz skenētu rasējumu atšifrēšanu |

@@ -96,6 +96,13 @@ MAIL_BATCH = int(os.getenv("ESUPPLIER_MAIL_BATCH") or 10)
 MAIL_POLL_S = int(os.getenv("ESUPPLIER_MAIL_POLL") or 60)
 #: Cik zīmju no ķermeņa aiziet modelim. Garākais parasti ir pārsūtīta sarakste.
 MAIL_BODY_LIMIT = 12000
+#: Adreses vai domēni, uz kuriem neatbildam nekad. Ar komatu. Domāts paša
+#: sistēmu paziņojumiem, kas nāk no īstas adreses un izsūtņu filtros neiekrīt.
+MAIL_IGNORE_SENDERS = tuple(
+    part.strip().lower()
+    for part in (os.getenv("ESUPPLIER_IMAP_IGNORE") or "").split(",")
+    if part.strip()
+)
 IMAP_TIMEOUT = 30.0
 
 # --- Pielikumi ------------------------------------------------------------

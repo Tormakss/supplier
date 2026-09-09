@@ -13,7 +13,11 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
-from ..config import MAIL_ATTACHMENTS_TEXT_LIMIT, MAIL_BODY_LIMIT
+from ..config import (
+    MAIL_ATTACHMENTS_TEXT_LIMIT,
+    MAIL_BODY_LIMIT,
+    MAIL_IGNORE_SENDERS,
+)
 from .attachments import (
     Attachment,
     decode_header_value,
@@ -42,8 +46,40 @@ _QUOTE_START = re.compile(
 _SIGNATURE = re.compile(r"^\s*(--\s*$|-{2,}\s*$|—{2,}\s*$)")
 
 #: Automātiskās vēstules, uz kurām atbildēt nedrīkst.
-_BULK_HEADERS = ("list-id", "list-unsubscribe", "auto-submitted", "x-auto-response-suppress")
-_NOREPLY = re.compile(r"(no[-._]?reply|do[-._]?not[-._]?reply|mailer-daemon|postmaster)@", re.I)
+#:
+#: Pirmās četras ir izsūtņu standarts. Pārējās ir masveida sūtītāju rīku pēdas:
+#: `Feedback-ID` un `X-MSFBL` ir atgriezeniskās saites cilpas, ko liek ESP, un
+#: dzīvs cilvēks tās neraksta nekad. Bez tām Temu reklāma tika lasīta kā klienta
+#: pieprasījums — 130 vēstules vienā pastkastītē, katra par pilnu aģenta ciklu.
+_BULK_HEADERS = (
+    "list-id",
+    "list-unsubscribe",
+    "list-post",
+    "list-help",
+    "list-subscribe",
+    "auto-submitted",
+    "x-auto-response-suppress",
+    "feedback-id",
+    "x-msfbl",
+    "x-campaign-id",
+    "x-campaignid",
+    "x-mailer-campaign",
+    "x-ses-outgoing",
+    "x-sg-eid",
+    "x-mailgun-sending-ip",
+    "x-report-abuse",
+)
+#: `[-._a-z0-9]*` pirms `@` ir obligāts: `noreply-lv@omniva.lv` bez tā netika
+#: noķerts, un uz automātisko atbildi aizgāja pilns aģenta cikls.
+_NOREPLY = re.compile(
+    r"(no[-._]?reply|do[-._]?not[-._]?reply|mailer-daemon|postmaster)[-._a-z0-9]*@", re.I
+)
+
+#: `Return-Path` uz bounce adresi. Masveida sūtīšanas rīki katrai vēstulei liek
+#: savu atgriešanas adresi (`bounces-23732@mb.account.temu.com`), lai skaitītu
+#: atlēcienus. Klienta vēstulē `Return-Path` sakrīt ar sūtītāju — pārbaudīts
+#: pret dzīvu pastkastīti, kur to nebija nevienai īstai vēstulei.
+_BOUNCE_PATH = re.compile(r"bounce|msprvs\d*=", re.I)
 
 
 @dataclass(slots=True)
@@ -171,12 +207,31 @@ def skip_reason(
     sender = (msg.get("from") or "").lower()
     if _NOREPLY.search(sender):
         return "sūtītājs neatbild (no-reply)"
+    if _BOUNCE_PATH.search(msg.get("return-path") or ""):
+        return "masveida izsūtne (bounce adrese)"
+    ignored = ignored_sender(sender)
+    if ignored:
+        return f"sūtītājs ESUPPLIER_IMAP_IGNORE sarakstā ({ignored})"
     if msg.get_content_type() in ("multipart/report", "message/delivery-status"):
         return "piegādes atskaite"
     if own_address and own_address.lower() in sender:
         return "mūsu pašu vēstule"
     if len(body.strip()) < 15 and not has_attachment_text:
         return "tukšs ķermenis"
+    return ""
+
+
+def ignored_sender(sender: str) -> str:
+    """Kurš `ESUPPLIER_IMAP_IGNORE` ieraksts sakrīt ar šo sūtītāju.
+
+    Domāts paša sistēmu paziņojumiem, kas nāk no īstas adreses un tāpēc nevienā
+    izsūtņu filtrā neiekrīt: veikala pasūtījumi, monitorings, rēķinu sistēma.
+    Ieraksts der gan kā pilna adrese, gan kā domēns.
+    """
+    address = (sender or "").lower()
+    for entry in MAIL_IGNORE_SENDERS:
+        if entry and entry in address:
+            return entry
     return ""
 
 
