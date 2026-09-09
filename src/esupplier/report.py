@@ -1,9 +1,7 @@
 """Atbildes sagatavošana nosūtīšanai: sadalīšana, konsole, HTML e-pastam.
 
-Modelis atbild divās daļās — vēstule klientam un iekšējās piezīmes menedžerim
-(skat. ATBILDES FORMĀTS sistēmas promptā). Šeit tās sadalām, jo uz e-pastu
-aiziet TIKAI pirmā daļa. Iekšējā daļa HTML failā nenonāk nekad: viena
-neuzmanīga Ctrl+A, un klients izlasa, ko mēs par viņa pieprasījumu nezinām.
+Modelis atbild divās daļās (skat. ATBILDES FORMĀTS promptā). Uz e-pastu aiziet
+TIKAI pirmā; iekšējā daļa HTML failā nenonāk nekad.
 """
 
 from __future__ import annotations
@@ -23,8 +21,7 @@ from markdown_it import MarkdownIt
 from .catalog import units
 from .config import ANSWERS_DIR, CONTACT_EMAIL, SITE_URL, VAT_RATE
 
-#: Virsraksts, ar ko sākas iekšējā daļa. Karogs ir primārais marķieris —
-#: vārds "IEKŠĒJI" mainās līdz ar valodu, kurā menedžeris jautāja.
+#: Iekšējās daļas virsraksts. Karogs ir primārais: vārds mainās ar valodu.
 _INTERNAL_HEADING = re.compile(
     r"^\s{0,3}#{0,4}\s*(?:\*\*)?\s*(?:⚑|IEKŠĒJI|IEKSEJI|ВНУТРЕН|INTERNAL)",
     re.IGNORECASE,
@@ -38,9 +35,8 @@ _RULE = re.compile(r"^\s*(-{3,}|\*{3,}|_{3,})\s*$")
 def split_answer(text: str) -> tuple[str, str]:
     """Sadala atbildi (vēstule klientam, iekšējās piezīmes).
 
-    Ja iekšējās daļas nav — visa atbilde ir vēstule. Tas ir apzināti drošāks
-    virziens nekā otrādi: labāk menedžeris ierauga lieku rindkopu, nekā
-    klients saņem tukšu vēstuli.
+    Bez iekšējās daļas visa atbilde ir vēstule: labāk lieka rindkopa
+    menedžerim nekā tukša vēstule klientam.
     """
     lines = text.splitlines()
     for i, line in enumerate(lines):
@@ -54,18 +50,14 @@ def split_answer(text: str) -> tuple[str, str]:
     return text.strip(), ""
 
 
-#: Mūsu iekšējā eskalācijas adrese. Vēstulē klientam tai nav ko darīt: klients
-#: uz to tikko atrakstīja, un "nosūtiet šo pieprasījumu uz office@..." nozīmē,
-#: ka viņš saņēma atpakaļ savu paša vēstuli.
+#: Mūsu iekšējā eskalācijas adrese. Klientam tā nozīmē "sūti to, ko tikko sūtīji".
 _CONTACT = re.compile(re.escape(CONTACT_EMAIL), re.I)
 
 
 def contact_leaks(text: str) -> list[str]:
     """Klienta vēstules rindas, kurās nonākusi mūsu iekšējā adrese.
 
-    Prompts to aizliedz, bet aizliegums promptā nav garantija — un šī kļūda
-    ir tieši tāda, ko menedžeris nepamana: vēstule izskatās pareiza, tikai
-    beigās klientam pateikts uzrakstīt turp, kur viņš jau uzrakstīja.
+    Prompts to aizliedz, bet aizliegums promptā nav pārbaude.
     """
     letter, _internal = split_answer(text)
     return [line.strip() for line in letter.splitlines() if _CONTACT.search(line)]
@@ -82,9 +74,8 @@ def known_image_urls(conn: sqlite3.Connection) -> set[str]:
 def verify_images(text: str, known: set[str] | None) -> tuple[str, list[str]]:
     """Izmet attēlus, kuru nav katalogā. Atgriež (teksts, izmesto URL saraksts).
 
-    Ja modelis attēla adresi izdomā vai pieliek bildi no cita produkta, klients
-    saņem foto ar nepareizu preci — un tas ir sliktāk nekā foto vispār bez.
-    Tukšs `known` (nesinhronizēts katalogs) pārbaudi izslēdz.
+    Foto ar nepareizu preci ir sliktāk nekā bez foto. Tukšs `known`
+    (nesinhronizēts katalogs) pārbaudi izslēdz.
     """
     if not known:
         return text, []
@@ -101,11 +92,9 @@ def verify_images(text: str, known: set[str] | None) -> tuple[str, list[str]]:
     return _IMAGE.sub(replace, text), dropped
 
 
-#: Markdown saite, kas NAV attēls. `(?<!!)` tur nost `![alt](url)` — tos
-#: pārbauda `verify_images`, un divkārša pārbaude vienu un to pašu izmestu divreiz.
+#: Markdown saite, kas NAV attēls. `(?<!!)` tur nost `![alt](url)`.
 _LINK = re.compile(r"(?<!!)\[([^\]]*)\]\(\s*(\S+?)\s*\)")
-#: Atlikuma skaitlis vēstulē. Modelis to vairs neredz (`to_search_dict`), tāpēc
-#: katrs šāds skaitlis ir izdomāts — un tieši tāds klientam ir bīstamākais.
+#: Atlikuma skaitlis vēstulē. Modelis to neredz, tāpēc katrs ir izdomāts.
 _STOCK_LEAK = (
     re.compile(r"noliktavā\s+(?:ir\s+|pieejam\w+\s+)?\d", re.IGNORECASE),
     re.compile(r"\d\s*(?:gab\.?|m²|m)\s+noliktavā", re.IGNORECASE),
@@ -124,9 +113,7 @@ def known_product_urls(conn: sqlite3.Connection) -> set[str]:
 def verify_links(text: str, known: set[str] | None) -> tuple[str, list[str]]:
     """Izmet saites, kuru nav katalogā. Atgriež (teksts, izmesto URL saraksts).
 
-    Tas pats iemesls, kas bildēm: saite uz nepareizu preci ir sliktāka par
-    saites trūkumu, un adresi, kas salikta no artikula, klients atver un
-    ierauga 404. Tukšs `known` (nesinhronizēts katalogs) pārbaudi izslēdz.
+    Tas pats iemesls, kas bildēm; no artikula salikta adrese dod 404.
     """
     if not known:
         return text, []
@@ -146,8 +133,7 @@ def verify_links(text: str, known: set[str] | None) -> tuple[str, list[str]]:
 def stock_leaks(text: str) -> list[str]:
     """Rindas, kurās vēstulē parādījies atlikuma skaitlis vai vārds.
 
-    Klientam pieejamība ir "ir" vai "nav". Precīzs atlikums mainās ātrāk, nekā
-    vēstule aiziet, un skaitlis, ko klients izlasīja, kļūst par solījumu.
+    Atlikums mainās ātrāk, nekā vēstule aiziet, bet klientam tas ir solījums.
     """
     letter, _internal = split_answer(text)
     found: list[str] = []
@@ -160,10 +146,8 @@ def stock_leaks(text: str) -> list[str]:
 def stock_notes(conn: sqlite3.Connection, skus: list[str]) -> list[str]:
     """Atlikums menedžerim — pa vienai rindai uz artikulu.
 
-    Skaitli pieliek PROGRAMMA, ne modelis. Modelim tā nav vispār, tāpēc
-    klientam tas nevar nonākt pat kļūdas ceļā; menedžerim tas ir vajadzīgs,
-    lai izlemtu par rezervāciju, un šeit tas ir vienmēr, ne tikai tad, kad
-    modelis atcerējās pajautāt.
+    Skaitli pieliek PROGRAMMA, ne modelis: modelim tā nav vispār, tāpēc
+    klientam tas nevar nonākt pat kļūdas ceļā.
     """
     if not skus:
         return []
@@ -190,31 +174,20 @@ def stock_notes(conn: sqlite3.Connection, skus: list[str]) -> list[str]:
 
 
 # --- izcelsme --------------------------------------------------------------
-# Anthropic `commerce-agents` pieraksts: rakstīšana pieņem TIKAI tos
-# identifikatorus, ko šajā sesijā atgrieza rīks. Viņiem tie ir vārti pirms
-# groza; mums rakstīšana ir pati vēstule, un aizturēt to nevar — tā jau ir
-# uzrakstīta. Tāpēc pārbaudām pēc fakta un sakām menedžerim.
-#
-# Promptā noteikums ir no paša sākuma ("Atbildi TIKAI par produktiem, ko
-# atgriež search_products"). Prompts nav pārbaude: līdz šim vienīgais, ko
-# kāds tiešām salīdzināja ar katalogu, bija bildes.
+# Anthropic `commerce-agents` pieraksts, bet pēc fakta: vēstule jau ir
+# uzrakstīta, tāpēc nesakritību sakām menedžerim, ne aizturam.
 
-#: Artikuls katalogā ir cipari ar vadošajām nullēm ("000013357"). Seši cipari
-#: ir apakšējā robeža — zem tās sākas daudzumi, gadi un izmēri.
+#: Artikuls ir cipari ar vadošajām nullēm. Zem sešiem sākas gadi un izmēri.
 _SKU = re.compile(r"\b\d{6,12}\b")
-#: Naudas summa: divas zīmes aiz komata un `€` vai `EUR` blakus. Bez valūtas
-#: zīmes "12,50" var būt izmērs, un tad katra vēstule izskatītos aizdomīga.
-#:
-#: Atstarpe kā tūkstošu atdalītājs derīga TIKAI pa trim cipariem. Ar brīvu
-#: ciparu un atstarpju virkni "Poz.1 000013357 47.38 €" tika nolasīts kā viena
-#: summa, un artikuls pazuda skaitļa iekšienē.
+#: Naudas summa: divas zīmes aiz komata un valūta blakus. Bez valūtas "12,50"
+#: var būt izmērs. Atstarpe kā tūkstošu atdalītājs derīga TIKAI pa trim
+#: cipariem: citādi "Poz.1 000013357 47.38 €" nolasās kā viena summa.
 _MONEY = re.compile(
     r"(?<![\d.,])(\d{1,3}(?:[ \u00a0]\d{3})+[.,]\d{2}|\d+[.,]\d{2})\s*(?:€|EUR\b)"
 )
 #: Jebkurš skaitlis vēstulē. Tie ir daudzumi, ar kuriem modelis reizina cenu.
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
-#: Cik daudzumu ņemam vērā. Reizinājumu kopa aug ar katru, un vēstulē ar
-#: divdesmit skaitļiem tā vairs neko nepasaka.
+#: Cik daudzumu ņemam vērā, pirms reizinājumu kopa kļūst bezjēdzīgi plata.
 _MAX_MULTIPLIERS = 25
 #: Cik pozīciju summu vēl uzskatām par kopsummu.
 _MAX_SUM_TERMS = 6
@@ -225,8 +198,7 @@ class Provenance:
     """Ko rīki tiešām atdeva šajā gājienā."""
 
     skus: set[str] = field(default_factory=set)
-    #: Cenas centos. Veseli skaitļi tāpēc, ka 47.38 * 358 peldošajā komatā
-    #: nesakrīt ar to pašu summu, ko izrēķināja modelis.
+    #: Cenas centos: 47.38 * 358 peldošajā komatā nesakrīt ar modeļa summu.
     prices: set[int] = field(default_factory=set)
 
     def __bool__(self) -> bool:
@@ -262,9 +234,8 @@ def _collect(node: Any, found: Provenance) -> None:
 def tool_provenance(tool_calls: Iterable[Any]) -> Provenance:
     """Artikuli un cenas, ko rīki atgrieza šajā gājienā.
 
-    Lasām rīka atbildi, ne katalogu: pārbaudes jēga ir tieši tāda, ka vēstulē
-    drīkst būt tikai tas, ko modelis TIEŠĀM redzēja. Katalogā esošs, bet
-    neizsaukts artikuls ir tikpat izdomāts kā jebkurš cits.
+    Lasām rīka atbildi, ne katalogu: katalogā esošs, bet neizsaukts artikuls
+    ir tikpat izdomāts kā jebkurš cits.
     """
     found = Provenance()
     for call in tool_calls:
@@ -296,9 +267,8 @@ def unbacked_skus(letter: str, seen: set[str]) -> list[str]:
 def _derived_prices(seen: set[int], multipliers: set[float]) -> set[int]:
     """Cenas, kas no kataloga cenām izriet ar reizināšanu.
 
-    Divi soļi, ne vairāk. Pirmais dod pozīcijas summu (cena * daudzums), otrais
-    to pašu ar PVN — tieši tā, kā prompts liek rēķināt. Trešais solis vairs
-    neko nepaskaidrotu, tikai padarītu kopu tik platu, ka tajā trāpa jebkas.
+    Divi soļi: pozīcijas summa un tā pati ar PVN. Trešais padarītu kopu tik
+    platu, ka tajā trāpa jebkas.
     """
     with_vat = 1.0 + VAT_RATE
     products = {int(round(price * factor)) for price in seen for factor in multipliers}
@@ -318,10 +288,8 @@ def _sums(values: list[int]) -> set[int]:
 def unbacked_prices(letter: str, seen: set[int]) -> list[str]:
     """Cenas vēstulē, kas nav ne katalogā, ne izrēķināmas no tā, kas tur ir.
 
-    Pieņemam plaši un apzināti: kataloga cena, tā reizināta ar jebkuru vēstulē
-    minētu skaitli, tas pats ar PVN, un vairāku šādu summu kopsumma. Kļūda uz
-    "atzīstam" pusi maksā palaistu garām skaitli; kļūda uz otru pusi maksā
-    brīdinājumu pie katras vēstules, un tādus pēc nedēļas vairs neviens nelasa.
+    Pieņemam plaši apzināti: brīdinājumu pie KATRAS vēstules pēc nedēļas
+    vairs neviens nelasa.
     """
     if not seen:
         return []
@@ -347,8 +315,7 @@ def unbacked_prices(letter: str, seen: set[int]) -> list[str]:
         return any(abs(value - candidate) <= 1 for candidate in pool)
 
     accepted = [value for _, value in figures if known(value, derived)]
-    # Kopsumma ar PVN ir kopsumma bez PVN reizināta ar likmi, un kopsumma pati
-    # nav nevienas kataloga cenas reizinājums — tāpēc PVN solis jāatkārto arī te.
+    # Kopsumma pati nav kataloga cenas reizinājums, tāpēc PVN solis jāatkārto.
     totals = _sums(accepted)
     totals |= {int(round(total * (1.0 + VAT_RATE))) for total in totals}
     return sorted(
@@ -363,12 +330,8 @@ def unbacked_prices(letter: str, seen: set[int]) -> list[str]:
 def for_console(text: str) -> str:
     """Konsolei: attēls -> klikšķināma ikona.
 
-    Pilns URL tabulas ailē terminālī izstiepj kolonnu pāri ekrānam un padara
-    atbildi nelasāmu. Bet tukša ikona bija otra galējība: menedžeris redzēja
-    📷 bez adreses un bez pielikuma, un, lai vispār ieraudzītu bildi, viņam
-    bija jāatceras izsaukt /save. Tāpēc ikona paliek, bet kļūst par Markdown
-    saiti — Rich to terminālī atdod kā īstu hipersaiti, kolonnas platums
-    nemainās, un Cmd+klikšķis atver bildi.
+    Pilns URL izstiepj tabulas kolonnu pāri ekrānam; tukša ikona neļauj bildi
+    atvērt. Markdown saite Rich terminālī dod abus.
     """
     return _IMAGE.sub(lambda m: f"[📷]({m.group(2)})", text)
 
@@ -376,10 +339,8 @@ def for_console(text: str) -> str:
 def has_internal(text: str) -> bool:
     """Vai atbildē vispār ir iekšējais bloks.
 
-    Bloks ir OBLIGĀTS, kad ir vēstule klientam (skat. ATBILDES FORMĀTS). Ja
-    tā nav, tam ir tikai divi iemesli, un abi ir jāzina: modelis to izlaida,
-    vai atbilde tika apcirsta pusvārdā. Klusējot izlaists bloks menedžerim
-    izskatās pēc "nekas nav jādara".
+    Bloks ir OBLIGĀTS. Tā trūkumam ir divi iemesli, un abi jāzina: modelis to
+    izlaida vai atbilde tika apcirsta.
     """
     _letter, internal = split_answer(text)
     return bool(internal.strip())
@@ -388,8 +349,7 @@ def has_internal(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # HTML
 # ---------------------------------------------------------------------------
-#: Stili rakstām katram tagam atsevišķi (nevis <style> blokā), jo Outlook un
-#: Gmail dokumenta stilu lapu pie ielīmēšanas nomet.
+#: Stili katram tagam atsevišķi: Outlook un Gmail <style> bloku nomet.
 _STYLES = {
     "table": "border-collapse:collapse;width:100%;margin:16px 0;font-size:14px",
     "th": "border:1px solid #d0d5dd;padding:8px 10px;background:#f5f6f8;text-align:left",
@@ -431,8 +391,7 @@ Tehnisko Materiālu Sagāde &middot; <a href="{site}" style="color:#667085">{sit
 </html>
 """
 
-#: `linkify` apzināti nav ieslēgts — tas prasītu vēl vienu atkarību, un saites
-#: modelis tāpat raksta Markdown formātā.
+#: `linkify` apzināti izslēgts: prasītu atkarību, un modelis raksta Markdown.
 _markdown = MarkdownIt("commonmark").enable("table")
 
 

@@ -12,14 +12,17 @@ from dataclasses import replace
 from email.message import EmailMessage
 
 import pytest
+from rich.console import Console
 
 from esupplier import report
 from esupplier.agent.loop import AgentResult
 from esupplier.agent.tools import ToolCall
 from esupplier.catalog import db
 from esupplier.mail import run as mail_run
+from esupplier.mail import vision
+from esupplier.mail.imap import login_hint
 from esupplier.mail.attachments import Attachment
-from esupplier.mail.message import Incoming, parse_message
+from esupplier.mail.message import Incoming
 from helpers_files import make_empty_pdf
 
 ANSWER = """\
@@ -254,6 +257,9 @@ def test_scanned_drawing_reaches_the_model(conn, monkeypatch) -> None:
         return AgentResult(text=ANSWER)
 
     monkeypatch.setattr(mail_run, "run_turn", spy)
+    # `VisionClient` ir OpenAI formas viltus klients, tāpēc dzinēju piesienam:
+    # citādi `_ask` aizietu pa abonementa ceļu un tests kāptu tīklā.
+    monkeypatch.setattr(vision, "ENGINE", "openai")
     incoming = replace(
         CLIENT,
         body="",
@@ -551,3 +557,81 @@ def test_first_check_still_announces(conn, monkeypatch) -> None:
     assert "INBOX" in printed
     assert "Drafts" in printed
 
+
+
+# --- jaunas pastkastītes pieslēgšana ---------------------------------------
+class CheckBox(FakeBox):
+    """`FakeBox` plus tas, ko izmanto tikai `check_mailbox`."""
+
+    def __init__(self, drafts: str = "Drafts") -> None:
+        super().__init__({"1": b"", "2": b""})
+        self._drafts = drafts
+
+    def folders(self) -> list[tuple[str, set[str]]]:
+        return [("INBOX", set()), (self._drafts, {"\\drafts"})]
+
+    def drafts_folder(self) -> str:
+        if not self._drafts:
+            raise mail_run.MailError("Neatradu melnrakstu mapi.")
+        return self._drafts
+
+
+def test_check_reports_a_working_mailbox(monkeypatch, capsys) -> None:
+    """Pieslēdzot jaunu pastkastīti, vajag zināt divas lietas: vai parole der
+    un vai melnrakstu mape ir atrodama. Modelis tam nav vajadzīgs."""
+    monkeypatch.setattr(mail_run, "Mailbox", lambda **_: CheckBox("[Gmail]/Drafts"))
+    assert mail_run.check_mailbox(Console()) == 0
+    out = capsys.readouterr().out
+    assert "Savienojums ir" in out
+    assert "[Gmail]/Drafts" in out
+
+
+def test_check_fails_when_the_drafts_folder_is_missing(monkeypatch, capsys) -> None:
+    """Bez melnrakstu mapes viss pārējais ir bezjēdzīgs: `APPEND` krīt, un
+    sagatavotā atbilde pazūd bez pēdām."""
+    monkeypatch.setattr(mail_run, "Mailbox", lambda **_: CheckBox(""))
+    assert mail_run.check_mailbox(Console()) == 1
+    assert "Neatradu melnrakstu mapi" in capsys.readouterr().out
+
+
+def test_check_does_not_touch_the_model(monkeypatch) -> None:
+    box = CheckBox()
+    monkeypatch.setattr(mail_run, "Mailbox", lambda **_: box)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("check nedrīkst izsaukt modeli")
+
+    monkeypatch.setattr(mail_run, "build_client", boom)
+    monkeypatch.setattr(mail_run, "run_turn", boom)
+    assert mail_run.check_mailbox(Console()) == 0
+    assert box.appended == []
+    assert box.closed
+
+
+def test_gmail_app_password_error_says_what_to_do() -> None:
+    """Servera teksts "Application-specific password required" bez
+    paskaidrojuma izskatās pēc nepareizas paroles, un cilvēks maina paroli."""
+    hint = login_hint(
+        "imap.gmail.com",
+        "[ALERT] Application-specific password required: "
+        "https://support.google.com/accounts/answer/185833",
+    )
+    assert "App Password" in hint
+    assert "divpakāpju" in hint
+
+
+def test_disabled_imap_error_says_where_to_switch_it_on() -> None:
+    hint = login_hint("imap.gmail.com", "[ALERT] IMAP access is disabled for your domain.")
+    assert "IMAP" in hint and "Enable IMAP" in hint
+
+
+def test_wrong_password_hint_differs_by_server() -> None:
+    gmail = login_hint("imap.gmail.com", "AUTHENTICATIONFAILED")
+    other = login_hint("lima.trialine.lv", "AUTHENTICATIONFAILED")
+    assert "App Password" in gmail
+    assert "ESUPPLIER_IMAP_USER" in other
+
+
+def test_unrelated_error_gets_no_invented_advice() -> None:
+    """Nepareizs padoms ir sliktāks par nekādu: tas aizved projām no cēloņa."""
+    assert login_hint("imap.gmail.com", "timed out") == ""

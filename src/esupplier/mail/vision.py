@@ -1,20 +1,8 @@
 """Attēls -> teksts. Skenēts rasējums, foto un PDF bez teksta slāņa.
 
-`attachments.py` lasa to, kas failā ir kā teksts. Skenētā rasējumā teksta nav
-vispār: tur ir pikseļi, un vienīgais, kas tos izlasa, ir modelis, kurš attēlu
-redz. Šis modulis ir tieši tas solis un nekas vairāk.
-
-Divas lietas, kas te ir apzinātas:
-
-**Atšifrējums nav oriģināls.** Modelis nolasa "12 mm" no rasējuma, kurā bija
-"1,2 mm", un tālāk viss izskatās pēc datiem. Tāpēc atšifrējums aiziet atzīmēts
-(`avots: attēla atšifrējums`), un menedžeris par katru tādu pielikumu saņem
-atsevišķu brīdinājumu — ne to pašu, ko par nolasītu Excel faili.
-
-**Attēls ir svešs teksts.** Rasējumā var būt uzrakstīts "aizmirsti iepriekšējos
-norādījumus". Atšifrēšana notiek ATSEVIŠĶĀ izsaukumā bez rīkiem un bez sarunas
-vēstures, tāpēc sliktākais, ko tāds uzraksts panāk, ir sabojāts atšifrējums.
-Tālāk tas iet caur to pašu rāmi, kas visi pielikumi.
+Divas lietas ir apzinātas: atšifrējums NAV oriģināls (aiziet atzīmēts, un
+menedžeris saņem atsevišķu brīdinājumu), un attēla saturu izvēlējās svešs
+cilvēks — tāpēc izsaukums iet BEZ rīkiem un bez sarunas vēstures.
 """
 
 from __future__ import annotations
@@ -24,6 +12,8 @@ from io import BytesIO
 from typing import Any
 
 from ..config import (
+    CLAUDE_MODEL,
+    ENGINE,
     MAIL_ATTACHMENT_VISION,
     MAIL_ATTACHMENT_VISION_CHARS,
     MAIL_ATTACHMENT_VISION_DPI,
@@ -44,9 +34,8 @@ try:  # pragma: no cover
 except ImportError:  # pragma: no cover
     pdfium = None  # type: ignore[assignment]
 
-#: Ko sakām modelim par attēlu. Uzdevums ir PĀRRAKSTĪT, ne interpretēt: šeit
-#: uzminēts izmērs ir bīstamāks par trūkstošu, jo tālāk to neviens vairs
-#: neatšķirs no klienta rakstīta skaitļa.
+#: Uzdevums ir PĀRRAKSTĪT, ne interpretēt: uzminēts izmērs ir bīstamāks par
+#: trūkstošu, jo tālāk to vairs neatšķir no klienta rakstīta skaitļa.
 PROMPT = """Šis ir pielikums no klienta vēstules gumijas un blīvējumu piegādātājam.
 
 Pārraksti VISU, kas attēlā salasāms, latviešu valodā vai oriģinālvalodā:
@@ -64,12 +53,11 @@ Noteikumi:
 
 Sāc uzreiz ar saturu, bez ievada."""
 
-#: Ar ko modelis pasaka, ka lasāma teksta nav. Tukša atbilde nozīmētu to pašu,
-#: bet tukšumu nevar atšķirt no izsaukuma, kas nokrita pusceļā.
+#: Ar ko modelis pasaka, ka lasāma teksta nav. Tukšumu nevar atšķirt no
+#: izsaukuma, kas nokrita pusceļā.
 _EMPTY = "NAV_TEKSTA"
 
-#: Garākā mala pikseļos. Rasējuma izmēru atzīmes salasās; lielāks attēls maksā
-#: tokenus, bet vairs neko nepievieno.
+#: Garākā mala pikseļos. Virs tā tokeni aug, salasāmība ne.
 _MAX_EDGE = 2000
 
 
@@ -80,11 +68,10 @@ def available() -> bool:
 
 # --- attēla sagatavošana ---------------------------------------------------
 def _encode(image: Any) -> tuple[bytes, str]:
-    """Pillow attēls -> (baiti, MIME). PNG rasējumam, JPEG fotogrāfijai.
+    """Pillow attēls -> (baiti, MIME).
 
-    Rasējums ir līnijas uz balta — JPEG tās izsmērē tieši tur, kur ir izmēru
-    atzīmes. Fotogrāfijai otrādi: PNG no telefona bildes taisa desmit megabaitus
-    par velti.
+    PNG rasējumam: JPEG izsmērē līnijas tieši pie izmēru atzīmēm. JPEG paliek
+    fotogrāfijai, kur PNG taisa desmit megabaitus par velti.
     """
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
@@ -107,10 +94,8 @@ def _encode(image: Any) -> tuple[bytes, str]:
 def image_pages(item: Attachment) -> list[tuple[bytes, str]]:
     """Pielikums -> attēli, ko var sūtīt modelim. Tukšs saraksts = nav ko sūtīt.
 
-    PDF lapu attēlojam paši: `pypdf` no skenēta faila teksta neizvelk neko, un
-    iegultā attēla izvilkšana klūp pār CCITT un JPX kodējumiem. Lapas attēlošana
-    strādā vienalga, kas iekšā — arī tad, kad tas ir vektoru rasējums bez
-    teksta slāņa.
+    PDF lapu attēlojam, nevis velkam ārā iegulto attēlu: izvilkšana klūp pār
+    CCITT un JPX, attēlošana strādā vienalga, kas iekšā.
     """
     if Image is None:  # pragma: no cover
         return []
@@ -139,14 +124,12 @@ def image_pages(item: Attachment) -> list[tuple[bytes, str]]:
         with Image.open(BytesIO(item.data)) as image:
             image.load()
             return [_encode(image)]
-    except Exception:
-        # Bojāts vai neatbalstīts attēls (HEIC bez `pillow-heif`) — pielikums
-        # paliek neizlasīts ar savu iemeslu, tāpat kā līdz šim.
+    except Exception:  # bojāts vai neatbalstīts (HEIC bez `pillow-heif`)
         return []
 
 
 # --- izsaukums -------------------------------------------------------------
-def _ask(client: Any, images: list[tuple[bytes, str]]) -> str:
+def _ask_openai(client: Any, images: list[tuple[bytes, str]]) -> str:
     content: list[dict[str, Any]] = [{"type": "input_text", "text": PROMPT}]
     for data, mime in images:
         encoded = base64.b64encode(data).decode("ascii")
@@ -159,11 +142,76 @@ def _ask(client: Any, images: list[tuple[bytes, str]]) -> str:
     return (getattr(response, "output_text", "") or "").strip()
 
 
+def _ask_claude(images: list[tuple[bytes, str]]) -> str:
+    """Tas pats uzdevums caur Claude Agent SDK.
+
+    Attēls aiziet kā satura bloks, ne caur `Read`: failu sistēmu pastkastītes
+    dēmonam neatveram vienas bildes dēļ, kas jau ir atmiņā.
+    """
+    import asyncio
+
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        TextBlock,
+        query,
+    )
+
+    async def _stream():
+        content: list[dict[str, Any]] = []
+        for data, mime in images:
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": base64.b64encode(data).decode("ascii"),
+                    },
+                }
+            )
+        content.append({"type": "text", "text": PROMPT})
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": None,
+            "session_id": "default",
+        }
+
+    async def _run() -> str:
+        chunks: list[str] = []
+        options = ClaudeAgentOptions(
+            model=CLAUDE_MODEL,
+            system_prompt=PROMPT,
+            max_turns=1,
+            # Attēla saturu izvēlējās svešs cilvēks: ne rīku, ne vēstures.
+            allowed_tools=[],
+            mcp_servers={},
+            strict_mcp_config=True,
+            setting_sources=None,
+            permission_mode="bypassPermissions",
+        )
+        async for message in query(prompt=_stream(), options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock) and block.text:
+                        chunks.append(block.text)
+        return "\n".join(chunks).strip()
+
+    return asyncio.run(_run())
+
+
+def _ask(client: Any, images: list[tuple[bytes, str]]) -> str:
+    if ENGINE == "claude":
+        return _ask_claude(images)
+    return _ask_openai(client, images)
+
+
 def transcribe(attachments: list[Attachment], client: Any) -> None:
     """Aizpilda `text` tiem pielikumiem, kurus izlasīt var tikai skatoties.
 
-    Maina `attachments` uz vietas. Neko nemet: viens neizdevies atšifrējums
-    atgriež pielikumu tur, kur tas bija — pie menedžera ar godīgu iemeslu.
+    Maina `attachments` uz vietas un neko nemet: neizdevies atšifrējums
+    atgriež pielikumu pie menedžera ar godīgu iemeslu.
     """
     if not available():
         return
@@ -197,12 +245,9 @@ def transcribe(attachments: list[Attachment], client: Any) -> None:
         item.text = text
         item.transcribed = True
         item.note = ""
-        # Baitus vairs nevajag; vēstules apstrāde turpinās ar tekstu, un
-        # desmit megabaiti uz pielikumu paliktu karāties līdz gājiena beigām.
-        item.data = b""
+        item.data = b""  # citādi 10 MB uz pielikumu karājas līdz gājiena beigām
 
     if sum(1 for item in attachments if item.transcribed) > before:
-        # Atšifrējums pienāca pēc tam, kad budžets jau bija sadalīts, un tas
-        # ieskaitās tajā pašā: bez šī divi skenēti rasējumi izspiestu no
-        # konteksta pašu vēstuli tieši tāpat, kā to darītu divi PDF katalogi.
+        # Atšifrējums pienāca pēc budžeta sadales un ieskaitās tajā pašā:
+        # citādi divi skenēti rasējumi izspiestu no konteksta pašu vēstuli.
         apply_budget(attachments)

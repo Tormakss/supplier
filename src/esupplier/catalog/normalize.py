@@ -11,11 +11,8 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
-#: Visas tipogrāfiskās rakstzīmes, ko lapa lieto ASCII vietā, -> ASCII.
-#:
-#: Kritiskā šeit ir U+2033 (DOUBLE PRIME): katalogā 574 nosaukumos collas ir
-#: rakstītas kā 4\u2033, un parasto pēdiņu tajos NAV nevienā. Bez šīs kartes
-#: lietotāja 4" nekad nesakrīt ar katalogu, un collu parsēšana klusi atdod None.
+#: Tipogrāfiskās rakstzīmes -> ASCII. Kritiskā ir U+2033: 574 nosaukumos
+#: collas rakstītas kā 4\u2033, un parasto pēdiņu tajos nav nevienā.
 CHAR_MAP = str.maketrans({
     # domuzīmes -> mīnuss
     "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
@@ -34,8 +31,7 @@ CHAR_MAP = str.maketrans({
     "\u215d": ".625", "\u215e": ".875",
 })
 
-#: Collu marķieris. Pēc clean_text U+2033 jau ir ", bet pieņemam arī '' ,
-#: apostrofu (drukas kļūda lapā) un vārdus.
+#: Collu marķieris. Pēc clean_text U+2033 jau ir ", bet pieņemam arī apostrofu.
 _INCH = r"(?:\"|''|'|coll(?:as|u|ām)?|inch)"
 
 #: Collas -> DN (nominālais diametrs mm).
@@ -114,9 +110,8 @@ _MATERIAL_PLAIN: tuple[tuple[str, str], ...] = (
     ("gumij", "Gumija"),
 )
 
-#: Krāsas nosaukuma sākums -> meklēšanas sinonīmi. Katalogā krāsa ir tikai
-#: latviski ("Pelēka"), bet pieprasījums nāk arī krieviski un angliski, un
-#: tieši krāsa ir tas, ko klients nosauc pirmo ("vajag pelēku, ne melnu").
+#: Krāsas sākums -> meklēšanas sinonīmi. Katalogā krāsa ir tikai latviski,
+#: bet pieprasījums nāk arī krieviski un angliski.
 COLOR_ALIASES: tuple[tuple[str, str], ...] = (
     ("meln", "melns melna чёрный черный black"),
     ("balt", "balts balta белый white"),
@@ -148,8 +143,7 @@ _FALSE_WORDS = {"nē", "ne", "no", "false", "нет", "0", "nav"}
 def clean_text(value: str | None) -> str:
     """Vienādo tipogrāfiskās rakstzīmes, atstarpes un decimālkomatu.
 
-    Piemēro VISIEM teksta laukiem sinhronizācijas laikā (nosaukums, apraksti,
-    atribūtu nosaukumi un vērtības), lai katalogā būtu viena rakstība.
+    Piemēro VISIEM teksta laukiem sinhronizācijā, lai katalogā ir viena rakstība.
     """
     if not value:
         return ""
@@ -286,8 +280,7 @@ def parse_dn(value: str | None) -> int | None:
     return None
 
 
-#: Profili, blīvgumijas, ķīļi un aizsargprofili. Nosaukumā tiem ir mm izmēri
-#: ("1.5x6x12mm"), bet diametra NAV: tie ir taisni gabali, ne apaļas detaļas.
+#: Profili un blīvgumijas: nosaukumā mm izmēri, bet diametra NAV.
 _PROFILE_NAME = re.compile(
     r"profil|blīvgumij|blivgumij|blīvējum|blivejum", re.I | re.UNICODE
 )
@@ -296,21 +289,16 @@ _PROFILE_NAME = re.compile(
 def is_profile(name: str) -> bool:
     """Vai produkts ir profils/blīvgumija, kam DN nav jēgas.
 
-    Nosaukuma pēdējais mm skaitlis profilam ir augstums, nevis diametrs.
-    Kamēr tas nonāca `dn_mm` kolonnā, 323 no 324 profiliem katalogā bija
-    izdomāts diametrs: "3×10.7×12.8 mm" kļuva par DN13. Ar to meklēšana pēc
-    diametra atgrieza profilus, un pats skaitlis aizceļoja modelim kā
-    "dn_mm": 13.
+    Pēdējais mm skaitlis profilam ir augstums: kamēr tas gāja `dn_mm` kolonnā,
+    323 no 324 profiliem bija izdomāts diametrs ("3×10.7×12.8 mm" -> DN13).
     """
     return bool(_PROFILE_NAME.search(clean_text(name)))
 
 
 def parse_dn_pair(value: str | None) -> tuple[int | None, int | None]:
-    """Abi izmēri no pārejas: '4"x6"' -> (100, 150), 'DN100 x DN150' -> (100, 150).
+    """Abi izmēri no pārejas: '4"x6"' -> (100, 150).
 
-    Pārejai ir DIVI diametri, un klients var jautāt pēc jebkura no tiem, tāpēc
-    vienu skaitli glabāt nepietiek — 92 kataloga pārejas citādi atrodamas
-    tikai pēc puses no sava izmēra.
+    Klients var jautāt pēc jebkura no diviem diametriem.
     """
     text = clean_text(value)
     if not text:
@@ -343,9 +331,8 @@ def parse_dn_pair(value: str | None) -> tuple[int | None, int | None]:
 #: Camlock pamattipi — viens izmērs.
 CAMLOCK_TYPES = {"A", "B", "C", "D", "E", "F", "DC", "DP"}
 
-#: Pārejas starp diviem dažādiem izmēriem. Saraksts ievākts no paša kataloga,
-#: nevis no dokumentācijas: `R` galotne nozīmē "reducing", un BR/FR/DR/ER/CR
-#: visi reāli nes divus izmērus (31 produkts, ko sākotnējais saraksts izlaida).
+#: Pārejas starp diviem izmēriem. Saraksts no paša kataloga, ne dokumentācijas:
+#: `R` galotne = "reducing", un BR/FR/DR/ER/CR visi nes divus izmērus.
 REDUCER_TYPES = {
     "AR", "DAR", "SAR", "DRVR", "OLS",
     "BR", "FR", "DR", "ER", "CR", "CVR", "DVR",
@@ -360,9 +347,7 @@ ALL_TYPE_CODES = CAMLOCK_TYPES | REDUCER_TYPES | ADAPTER_TYPES
 def parse_type_code(name: str, attributes: Mapping[str, str]) -> str | None:
     """Savienojuma tipa kods ("AR", "DAR", "C") kā strukturēta vērtība.
 
-    Tekstā to meklēt nevar: "AR" kā FTS marķieris sakrīt ar latviešu vārdu
-    "ar" un atgriež 2803 no 3552 produktiem. Tāpēc kods jāglabā kolonnā un
-    jāfiltrē ar SQL.
+    Tekstā to meklēt nevar: "AR" sakrīt ar latviešu vārdu "ar".
     """
     for key, value in attributes.items():
         if re.fullmatch(r"\s*tips\s*", key, re.I):
@@ -378,8 +363,7 @@ def parse_type_code(name: str, attributes: Mapping[str, str]) -> str | None:
 # ---------------------------------------------------------------------------
 # Meklēšanas aliasi
 # ---------------------------------------------------------------------------
-#: Materiāla kods -> kā to sauc klienti. Katalogs raksta "MVQ gumija", klients
-#: raksta "silikona gumija", un bez šīs kartes tie nekad nesatiekas.
+#: Materiāla kods -> kā to sauc klienti ("MVQ" pret "silikona").
 MATERIAL_ALIASES: dict[str, str] = {
     "MVQ": "silikons silikona silikonu silicone силикон",
     "VMQ": "silikons silikona silikonu silicone силикон",
@@ -428,11 +412,7 @@ def build_aliases(
     thickness_mm: float | None = None,
     color: str | None = None,
 ) -> str:
-    """Papildu meklēšanas teksts: klienta vārdi -> kataloga kodi.
-
-    Klients raksta aprakstoši ("pāreja no 4 collām uz 6"), katalogs runā
-    kodos ("type AR 4\"x6\""). Šī ir tā tulkošanas josla.
-    """
+    """Papildu meklēšanas teksts: klienta vārdi -> kataloga kodi."""
     text = clean_text(name)
     parts: list[str] = []
 
@@ -460,15 +440,13 @@ def build_aliases(
         if synonyms:
             parts.append(synonyms)
 
-    # Biezums ir kolonnā, bet nosaukumā to bieži nav tādā formā, kā raksta
-    # klients: "MVQ gumija 2x1200mm" nesatur marķieri "2mm", tāpēc vaicājums
-    # "silikona gumija 2mm" to nekad neatrastu.
+    # "MVQ gumija 2x1200mm" nesatur marķieri "2mm", tāpēc vaicājums
+    # "silikona gumija 2mm" to citādi neatrastu.
     if thickness_mm:
         value = int(thickness_mm) if float(thickness_mm).is_integer() else thickness_mm
         parts.append(f"{value}mm {value} mm")
 
-    # Krāsa ir atribūtā, ne nosaukumā — bez šī "pelēks EPDM profils" neatrod
-    # neko, lai gan katalogā pelēki profili ir.
+    # Krāsa ir atribūtā, ne nosaukumā: "pelēks EPDM profils" citādi neatrod neko.
     alias = color_aliases(color)
     if alias:
         parts.append(alias)
@@ -523,11 +501,10 @@ def parse_hardness(value: str | None) -> float | None:
 # Materiāls
 # ---------------------------------------------------------------------------
 def parse_color(value: str | None) -> str | None:
-    """Krāsa tā, kā to raksta katalogs — bez izdomāta kanoniskā nosaukuma.
+    """Krāsa tā, kā to raksta katalogs.
 
-    Vērtības ir salikteņi ("Melna / tumši pelēka", "Dzeltens/Melns"), un
-    saīsināt tās līdz vienam vārdam nozīmētu pateikt klientam ko citu, nekā
-    ir preces aprakstā.
+    Vērtības ir salikteņi ("Melna / tumši pelēka"); saīsināt nozīmētu pateikt
+    klientam ko citu, nekā ir preces aprakstā.
     """
     cleaned = clean_text(value)
     return cleaned or None

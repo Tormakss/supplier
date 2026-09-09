@@ -99,10 +99,32 @@ Serveri ar roku palaist nevajag; to dara Claude Code. Pārbaudei:
 uv run mcp-katalogs      # stdio; klusē, līdz klients kaut ko pajautā
 ```
 
-**Pastkastītes dēmons uz abonementa neiet.** `uv run mail` visu diennakti pats
-aptaujā `INBOX`, un tā nav interaktīva sesija. Anthropic Agent SDK dokumentācija
-to pasaka tieši: bez iepriekšējas atļaujas claude.ai pieteikšanos un tās limitus
-trešo pušu produktos lietot nedrīkst. Dēmons paliek uz sava ceļa ar savu atslēgu.
+## Dzinēji
+
+Divi ceļi pie modeļa, viena uzvedība. Izvēli nosaka `ESUPPLIER_ENGINE`.
+
+| Dzinējs | Kas notiek | Ko maksā |
+|---|---|---|
+| `claude` (noklusējums) | Claude Agent SDK, tas ir, tas pats Claude Code kā bibliotēka | abonements |
+| `openai` | Responses API ar `OPENAI_API_KEY` | atslēgas konts |
+
+`claude` dzinējam **API atslēga nav vajadzīga**; vajadzīgs ir uzstādīts un
+pieteikts Claude Code. Modeli maina `ESUPPLIER_CLAUDE_MODEL`, noklusējums
+`claude-opus-5`.
+
+Zars ir vienā vietā, `loop.run_turn` iekšā. `mail/run.py`, `cli.py` un evali par
+dzinējiem neko nezina, un tā tam jāpaliek: divi ceļi ar vienu uzvedību ir
+vērtīgi tikai tik ilgi, kamēr izsaukuma puse ir viena.
+
+Kataloga rīki `claude` dzinējā iet **procesa iekšienē** (`create_sdk_mcp_server`),
+ne caur `.mcp.json`. Tas nav sīkums. Kamēr `strict_mcp_config` nebija ieslēgts,
+modelis aizgāja tieši uz projekta `.mcp.json` serveri: tie paši četri rīki, bet
+cits process, un izsaukumu pieraksts palika tukšs. Izcelsmes pārbaudei tad nebija
+ko salīdzināt, un tā klusēja, izskatoties pēc nostrādājušas.
+
+Aģentam atļauti tikai kataloga rīki. `Bash`, `Read`, `Write`, `WebFetch` un
+pārējie Claude Code iebūvētie ir aizliegti: pastkastītes dēmonam nav darīšanas ne
+ar failiem, ne čaulu, ne internetu.
 
 ## Pastkastīte
 
@@ -138,6 +160,41 @@ mapi meklējam pēc servera `\Drafts` karoga; ja serveris to nedod, ejam pēc
 nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
 `ESUPPLIER_IMAP_DRAFTS`.
 
+```bash
+uv run mail --check     # savienojums, mapes, melnrakstu mape; modeli neizsauc
+```
+
+Šo palaid pirmo, pieslēdzot jaunu pastkastīti. `--dry-run` arī neko neraksta,
+bet tas palaiž pilnu aģenta ciklu par katru vēstuli un maksā tokenus.
+
+### Gmail
+
+Gmail runā IMAP, un koda izmaiņas nav vajadzīgas — mainās trīs rindas `.env`:
+
+```
+ESUPPLIER_IMAP_HOST=imap.gmail.com
+ESUPPLIER_IMAP_USER=vards@gmail.com
+ESUPPLIER_IMAP_PASSWORD=<App Password>
+```
+
+**Parastā konta parole neder.** Google to IMAP pieslēgumiem nepieņem kopš
+2022. gada. Vajag App Password, un to izdod tikai kontam ar ieslēgtu
+divpakāpju verifikāciju. Gmail iestatījumos jābūt ieslēgtam arī pašam IMAP
+(Settings -> Forwarding and POP/IMAP). Workspace domēnā abus var būt aizliedzis
+administrators; tad paliek OAuth2 ar `XOAUTH2`, un **tas šeit vēl nav
+uzrakstīts**.
+
+Trīs Gmail īpatnības, ko ir vērts zināt iepriekš:
+
+| Kas | Kā izpaužas |
+|---|---|
+| Melnrakstu mape | `[Gmail]/Drafts` vai lokalizēts nosaukums; special-use karogu Gmail atdod, tāpēc atrodam paši |
+| Mūsu atslēgvārds | Gmail IMAP atslēgvārdus rāda kā etiķetes, tāpēc `$AiDrafted` parādīsies sānu joslā |
+| Meklēšana | Gmail `SEARCH` atbalsts ir šaurāks; ja `UNKEYWORD` atsakās, ejam uz `UNSEEN` un tad `ALL`, un dublēšanos notur SQLite žurnāls |
+
+Kļūdas paziņojums pie pieslēgšanās pasaka, kurš no šiem gadījumiem tas ir, ne
+tikai servera tekstu.
+
 ### Ko aģents ar vēstuli izdara
 
 | Solis | Kas notiek |
@@ -163,7 +220,7 @@ nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
 | `.rtf` | teksts bez fontu tabulas un stiliem |
 | `.txt`, `.csv`, `.md`, `.xml`, `.json` | teksts; bez kodējuma galvenē mēģinām `utf-8`, tad `cp1257` |
 | `.html` | teksts bez iezīmēm |
-| `.dxf` | uzraksti un izmēru atzīmes no rasējuma; ģeometrija ne |
+| `.dxf` | uzraksti un izmēru atzīmes no rasējuma; ģeometrija un CAD iekšas ne |
 | `.zip`, `.7z` | izpakots; katrs fails iekšā iet pa šo pašu tabulu |
 | attēli, skenēts PDF | **atšifrēti ar modeli** — skat. zemāk |
 | `.dwg`, 3D modeļi, `.rar` bez `unrar` | **netiek lasīti** — nosaukums un iemesls aiziet iekšējā blokā |
@@ -171,6 +228,11 @@ nosaukuma (`Drafts`, `INBOX.Drafts`, `Melnraksti`). Var norādīt ar roku:
 Arhīvs pats par sevi pieprasījums nav, tāpēc tas pazūd un tā vietā parādās tas,
 kas bija iekšā: `rasejumi.zip → skice-3.pdf`. Salikto vārdu menedžeris redz
 iekšējā blokā, lai zinātu, kurā failā meklēt.
+
+**Rasējums bez neviena uzraksta paliek cilvēkam.** No DXF faila ņemam tikai
+`TEXT`, `MTEXT` un izmēru entītijas; flat pattern, kurā ir tikai līnijas,
+atgriežas ar "bez uzrakstiem — jāatver ar roku". DXF attēlot mēs neprotam,
+tāpēc atšifrēšanas ceļš tam neder.
 
 **Vecais `.doc` un `.ppt` prasa LibreOffice.** Cita ceļa tiem nav. Ja `soffice`
 uz servera nav, tādi pielikumi paliek cilvēkam, un iekšējā blokā stāv tieši tas
@@ -370,7 +432,7 @@ visus klienta nosauktos skaitļus, rīks to pasaka `notes` laukā.
 ## Testi un evals
 
 ```bash
-uv run pytest                                    # 443 testi, bez API izsaukumiem
+uv run pytest                                    # 466 testi, bez API izsaukumiem
 uv run evals                                     # visi gadījumi (maksā tokenus)
 uv run evals --case vienkarsais                  # viens
 uv run evals --compare green-7of7.json           # pret iepriekšēju rezultātu
@@ -403,7 +465,8 @@ src/esupplier/
   agent/
     prompts.py        sistēmas prompts (nozares zināšanas + atbildes formāts)
     tools.py          rīku definīcijas un izpilde
-    loop.py           modelis → rīki → modelis
+    loop.py           dzinēja izvēle + OpenAI cikls: modelis → rīki → modelis
+    claude_loop.py    tas pats cikls caur Claude Agent SDK (abonements)
   mail/
     run.py            pastkastītes gājiens: vēstule → melnraksts
     imap.py           savienojums, mapes, APPEND
@@ -430,8 +493,10 @@ atbildes/*.html       sagatavotās vēstules
 
 | Mainīgais | Noklusējums | Ko dara |
 |---|---|---|
-| `OPENAI_API_KEY` | — | obligāts |
-| `ESUPPLIER_MODEL` | `gpt-5.6-luna` | modelis |
+| `ESUPPLIER_ENGINE` | `claude` | `claude` = abonements, `openai` = atslēga |
+| `ESUPPLIER_CLAUDE_MODEL` | `claude-opus-5` | modelis `claude` dzinējam |
+| `OPENAI_API_KEY` | — | obligāts tikai `openai` dzinējam |
+| `ESUPPLIER_MODEL` | `gpt-5.6-luna` | modelis `openai` dzinējam |
 | `ESUPPLIER_EFFORT` | `medium` | domāšanas dziļums; ar `minimal` retāk ķeras pie rīkiem |
 | `ESUPPLIER_DB` | `data/catalog.db` | kataloga ceļš |
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt HTML |

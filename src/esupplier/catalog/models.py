@@ -3,22 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from typing import Any
 
 from . import units
-
-
-@dataclass(slots=True)
-class Attribute:
-    """Neapstrādāts produkta atribūts no veikala (nosaukums + vērtības)."""
-
-    name: str
-    values: list[str] = field(default_factory=list)
-
-    @property
-    def value(self) -> str:
-        return ", ".join(self.values)
 
 
 @dataclass(slots=True)
@@ -33,8 +21,7 @@ class Product:
     sku: str
     name: str
     permalink: str
-    #: Galvenā produkta bilde. Klients atbildi bez foto neatpazīst — blīves un
-    #: savienojumi izskatās vienādi, kamēr tos neredz.
+    #: Galvenā bilde. Blīves un savienojumi izskatās vienādi, kamēr tos neredz.
     image_url: str = ""
     description: str = ""
     short_description: str = ""
@@ -42,8 +29,7 @@ class Product:
     price_excl_vat: float | None = None
     price_incl_vat: float | None = None
     currency: str = "EUR"
-    #: Kā prece tiek tirgota: `m`, `m2` vai `gab`. Veikala datos šī lauka NAV —
-    #: to pieliek `catalog/units.py` pēc kategorijas un SKU izņēmumiem.
+    #: `m`, `m2` vai `gab`. Veikala datos NAV; pieliek `catalog/units.py`.
     unit: str = "gab"
 
     is_in_stock: bool = False
@@ -115,31 +101,23 @@ class Product:
     def to_search_dict(self) -> dict[str, Any]:
         """Kompakts attēlojums modelim.
 
-        Apzināti šaurs: aprakstu šeit NAV nekad (Camlock produktiem tie ir
-        identiski ~900 zīmju bloki, kas noēd kontekstu), un tehniskie lauki,
-        kas vajadzīgi retāk, nāk tikai caur `get_product`.
-
-        ATLIKUMA SKAITĻA (`stock_qty`, `stock_text`) šeit NAV, un tas ir
-        apzināti. Klientam pieejamība ir "ir" vai "nav"; precīzs atlikums ir
-        mūsu iekšējais skaitlis, un tas mainās ātrāk, nekā vēstule aiziet.
-        Kamēr modelis to redzēja, tas godprātīgi rakstīja "pieejami 19 metri"
-        vēstulē, ko menedžeris sūta tālāk. Skaitli iekšējā blokā pieliek
-        programma (`report.stock_notes`) — tur tas klientam netiek nekad.
+        Apraksta šeit NAV nekad: Camlock produktiem tie ir identiski ~900
+        zīmju bloki. ATLIKUMA SKAITĻA arī nav, un tas ir apzināti — kamēr
+        modelis to redzēja, tas rakstīja "pieejami 19 metri" vēstulē klientam.
+        Iekšējā blokā to pieliek `report.stock_notes`.
         """
         out = {
             "sku": self.sku,
             "name": self.name,
             "price_eur_excl_vat": self.price_excl_vat,
             "price_eur_incl_vat": self.price_incl_vat,
-            # Modelim atdodam gatavu apzīmējumu ("m²", nevis "m2") — to tas
-            # kopē vēstulē, un pārrakstīšana pa ceļam nav vajadzīga.
+            # Gatavs apzīmējums ("m²", ne "m2"): modelis to kopē vēstulē.
             "unit": units.LABELS.get(self.unit, self.unit),
             "in_stock": self.is_in_stock,
             "url": self.permalink,
         }
-        # Tikai tad, kad ir ko teikt — citādi tērē kontekstu ar null. Sešos
-        # rezultātos katrs tukšais lauks maksā seškārt, un tas atkārtojas pie
-        # katra nākamā rīka izsaukuma, kad vēsture tiek pārsūtīta no jauna.
+        # Tikai tad, kad ir ko teikt: sešos rezultātos katrs tukšais lauks
+        # maksā seškārt, un vēsture tiek pārsūtīta pie katra izsaukuma.
         if self.material:
             out["material"] = self.material
         if self.dn_mm is not None:
@@ -148,8 +126,8 @@ class Product:
             out["food_grade"] = True
         if self.image_url:
             out["image_url"] = self.image_url
-        # Krāsu un cietību klients nosauc pirmajā teikumā ("pelēks, 70 Shore"),
-        # tāpēc tās vajag jau meklēšanas rezultātā, nevis pēc get_product.
+        # Krāsu un cietību klients nosauc pirmajā teikumā, tāpēc tās vajag
+        # jau meklēšanas rezultātā, ne pēc `get_product`.
         if self.color:
             out["color"] = self.color
         if self.hardness_sha is not None:
@@ -163,9 +141,8 @@ class Product:
     def to_browse_dict(self) -> dict[str, Any]:
         """Vēl šaurāks attēlojums pārlūkošanai.
 
-        `browse_category` atdod desmitiem produktu vienā izsaukumā, tāpēc katrs
-        lieks lauks reizinās ar 30. Šeit ir tikai tas, kas vajadzīgs, lai
-        ATPAZĪTU kandidātu; detaļas pēc tam paņem ar get_product.
+        `browse_category` atdod desmitiem produktu, tāpēc katrs lieks lauks
+        reizinās ar 30. Šeit tikai tas, kas vajadzīgs, lai ATPAZĪTU kandidātu.
         """
         out = {
             "sku": self.sku,

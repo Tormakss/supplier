@@ -1,14 +1,11 @@
 """Claude Code prasme no sistēmas prompta.
 
-Uzvedības noteikumi ir vieni — `agent/prompts.py`. Prasmes fails ir to
-ATVASINĀJUMS, ne otra kopija: pārrakstīts ar roku, tas pēc mēneša klusi
-atpaliktu, un menedžeris konsolē un Claude Code sesijā dabūtu divus dažādus
-aģentus ar vienu nosaukumu.
+Prasmes fails ir `agent/prompts.py` ATVASINĀJUMS, ne otra kopija: ar roku
+pārrakstīts, tas klusi atpaliktu.
 
     uv run skill        # pārraksta .claude/skills/piedavajums/SKILL.md
 
-`tests/test_claude_code.py` krīt, ja fails atpalicis no prompta, tāpēc
-aizmirstā palaišana tiek pamanīta, ne pieņemta.
+`tests/test_claude_code.py` krīt, ja fails atpalicis no prompta.
 """
 
 from __future__ import annotations
@@ -21,8 +18,7 @@ from .config import PROJECT_ROOT
 
 SKILL_PATH = PROJECT_ROOT / ".claude" / "skills" / "piedavajums" / "SKILL.md"
 
-#: Apraksts izšķir, VAI prasme vispār tiks ieslēgta, tāpēc tajā ir tie vārdi,
-#: ar kuriem menedžeris pienāk pie uzdevuma — "piedāvājums", "cena", "klients".
+#: Apraksts izšķir, VAI prasme tiks ieslēgta, tāpēc tajā ir menedžera vārdi.
 _FRONTMATTER = """\
 ---
 name: piedavajums

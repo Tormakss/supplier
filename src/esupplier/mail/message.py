@@ -1,12 +1,7 @@
 """Ienākošā vēstule: MIME -> teksts, ko var padot modelim.
 
-E-pasts nav tas pats, kas konsolē ielīmēta vēstule. Tajā ir citēta sarakste,
-paraksti, atrunas un pielikumi, un sistēmas prompts prasa atbildēt uz KATRU
-pieminēto pozīciju. Ja modelim aiziet arī vecā sarakste, tas godprātīgi
+Citāti un paraksti tiek nogriezti: ja modelim aiziet vecā sarakste, tas
 atbild arī uz to, ko klients prasīja pirms mēneša un jau saņēma.
-
-Pielikumu tekstu izvelk `attachments.py`; šeit tas tikai tiek salikts promptā
-tā, lai modelis nesajauktu specifikācijas rindu ar paša vēstules tekstu.
 """
 
 from __future__ import annotations
@@ -28,8 +23,7 @@ from .attachments import (
 from ..fences import fence_attachments, fence_letter, sanitize
 
 #: Rindas, aiz kurām sākas CITĒTĀ sarakste. Pirmā sakritība nogriež asti.
-#: Valodas ir trīs, jo tādā valodā raksta klienti, un pasta klienti attribūciju
-#: tulko (Outlook LV "No:", Gmail RU "Кому:", Thunderbird EN "On ... wrote:").
+#: Trīs valodas, jo pasta klienti attribūcijas rindu tulko.
 _QUOTE_START = re.compile(
     r"""^\s*(
           -{2,}\s*(Original\s+Message|Sākotnējā\s+vēstule|Исходное\s+сообщение)\s*-{2,}
@@ -44,13 +38,10 @@ _QUOTE_START = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-#: Paraksta atdalītājs. `-- ` ar atstarpi ir standarts (RFC 3676), pārējie —
-#: tas, ko cilvēki raksta ar roku.
+#: Paraksta atdalītājs. `-- ` ar atstarpi ir RFC 3676; pārējie — ar roku rakstīti.
 _SIGNATURE = re.compile(r"^\s*(--\s*$|-{2,}\s*$|—{2,}\s*$)")
 
-#: Automātiskās vēstules, uz kurām atbildēt nedrīkst: atvaļinājuma
-#: paziņojumi, jaunumu izsūtnes, piegādes kļūdas. Katra no tām maksā vienu
-#: pilnu aģenta ciklu un beidzas ar melnrakstu, kas nevienam nav vajadzīgs.
+#: Automātiskās vēstules, uz kurām atbildēt nedrīkst.
 _BULK_HEADERS = ("list-id", "list-unsubscribe", "auto-submitted", "x-auto-response-suppress")
 _NOREPLY = re.compile(r"(no[-._]?reply|do[-._]?not[-._]?reply|mailer-daemon|postmaster)@", re.I)
 
@@ -70,14 +61,12 @@ class Incoming:
     body: str = ""
     #: Pilns ķermenis, kāds tas atnāca. Vajadzīgs melnraksta citātam.
     raw_body: str = ""
-    #: Pielikumi ar izvilkto tekstu. Tas, ko izlasīt neizdevās, nes `note`.
     attachments: list[Attachment] = field(default_factory=list)
     references: str = ""
 
     @property
     def recipient(self) -> str:
-        """Kam adresējam atbildi. `Reply-To` uzvar pār `From` — tā ir tā adrese,
-        ko klients pats norādīja atbildēm."""
+        """Kam adresējam atbildi. `Reply-To` uzvar pār `From`."""
         return self.reply_to or self.sender
 
     @property
@@ -86,12 +75,8 @@ class Incoming:
         return f"{who} — {self.subject or '(bez temata)'}"
 
     @property
-    def attachment_names(self) -> list[str]:
-        return [item.name for item in self.attachments]
-
-    @property
     def unread_attachments(self) -> list[Attachment]:
-        """Pielikumi, kas paliek cilvēkam: CAD, parolēti faili, tukšie arhīvi."""
+        """Pielikumi, kas paliek cilvēkam."""
         return [item for item in self.attachments if not item.read]
 
     @property
@@ -103,9 +88,8 @@ class Incoming:
     def has_attachment_content(self) -> bool:
         """Vai pielikumos ir pieprasījums — jau izlasīts vai vēl atšifrējams.
 
-        `can_transcribe` te skaitās līdzvērtīgi izlasītam: atšifrēšana notiek
-        vēlāk, jau ar modeli, un vēstule "Labdien, skat. pielikumā" ar skenētu
-        rasējumu nedrīkst nokrist kā tukša pirms tam, kad rasējumu kāds atvēra.
+        `can_transcribe` skaitās līdzvērtīgi izlasītam: atšifrēšana notiek
+        vēlāk, un "skat. pielikumā" nedrīkst nokrist kā tukša pirms tam.
         """
         return any(item.read or item.can_transcribe for item in self.attachments)
 
@@ -146,12 +130,7 @@ def extract_body(msg: EmailMessage) -> str:
 
 
 def clean_body(text: str) -> str:
-    """Nogriež citēto saraksti un parakstu.
-
-    Citāts modelim ir bīstamāks nekā tā trūkums: promptā ir "NEKAD neizlaid
-    pozīciju klusējot", tāpēc pārsūtītā sarakstē pieminētā vecā prece nonāk
-    jaunajā piedāvājumā kā aktuāla pozīcija.
-    """
+    """Nogriež citēto saraksti un parakstu."""
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     kept: list[str] = []
     for line in lines:
@@ -164,13 +143,9 @@ def clean_body(text: str) -> str:
         kept.append(line)
 
     body = "\n".join(kept).strip()
-    # Ja apgriešana atstāja TUKŠUMU, bet oriģinālā bija teksts, heiristika
-    # nostrādāja pārāk cieši — labāk pilns ķermenis ar citātu nekā tukša ziņa
-    # modelim: uz tukšu ievadi tas izdomā pieprasījumu no temata.
-    #
-    # Slieksnis ir tas pats, ko `skip_reason` sauc par tukšu ķermeni. Augstāks
-    # slieksnis atgrieza citātu arī tad, kad īstais pieprasījums bija viena
-    # īsa rinda ("Vajag silikona šļūteni DN25.") — un tieši tā klienti raksta.
+    # Pārāk cieši apgriezts: labāk pilns ķermenis ar citātu nekā tukšs — uz
+    # tukšu ievadi modelis izdomā pieprasījumu no temata. Slieksnis sakrīt ar
+    # `skip_reason`; augstāks atgrieza citātu arī īsam īstam pieprasījumam.
     if len(body) < 15 and len(text.strip()) > 15:
         return text.strip()
     return body
@@ -184,12 +159,8 @@ def skip_reason(
 ) -> str:
     """Kāpēc uz šo vēstuli NEATBILDAM. Tukša virkne = atbildam.
 
-    Katra apstrādātā vēstule maksā vienu pilnu aģenta ciklu, tāpēc jaunumu
-    izsūtnes un atvaļinājuma auto-atbildes filtrējam pirms modeļa, ne pēc.
-
-    `has_attachment_text` atslēdz tukšā ķermeņa filtru: "Labdien, skat.
-    pielikumā" ir īsāks par slieksni, bet tā ir pilnvērtīga vēstule, kurai
-    pieprasījums vienkārši ir Excel failā.
+    `has_attachment_text` atslēdz tukšā ķermeņa filtru: "skat. pielikumā" ir
+    īsāks par slieksni, bet pieprasījums tur ir failā.
     """
     for header in _BULK_HEADERS:
         if msg.get(header):
@@ -248,13 +219,8 @@ def parse_message(raw: bytes, uid: str = "") -> Incoming:
 def attachments_prompt(attachments: list[Attachment]) -> str:
     """Pielikumi tādā formā, kādā tos redz modelis: JSON savā rāmī.
 
-    Izlasītais teksts iet ATSEVIŠĶI no vēstules ķermeņa. Bez tā modelis
-    specifikācijas rindu "EPDM 12mm — 358 gab." lasa kā paša klienta rakstītu
-    teikumu un pārraksta to piedāvājumā kā apstiprinātu pozīciju, arī tad, kad
-    tā bija vecas tāmes aile.
-
-    Neizlasītos nosaucam vārdā. Ko ar tiem darīt, pasaka rāmja paziņojums
-    sistēmas promptā, tāpēc šeit paliek tikai dati.
+    Teksts iet ATSEVIŠĶI no ķermeņa: citādi modelis vecas tāmes aili lasa kā
+    klienta rakstītu un pārraksta piedāvājumā kā apstiprinātu pozīciju.
     """
     if not attachments:
         return ""
@@ -266,9 +232,7 @@ def attachments_prompt(attachments: list[Attachment]) -> str:
             continue
         entry = {"nosaukums": item.name, "teksts": item.text}
         if item.transcribed:
-            # Atšifrējums nav oriģināls. Modelim tas jāzina tāpat kā menedžerim:
-            # no rasējuma nolasīts "12 mm" var būt "1,2 mm", un tad precizējošs
-            # jautājums klientam ir vērtīgāks par pārliecinātu piedāvājumu.
+            # Atšifrējums nav oriģināls: "12 mm" no rasējuma var būt "1,2 mm".
             entry["avots"] = (
                 "attēla atšifrējums — teksts nolasīts no bildes, izmēri var būt neprecīzi"
             )
@@ -282,20 +246,16 @@ def attachments_prompt(attachments: list[Attachment]) -> str:
         payload["izlasitie"] = read
     if unread:
         payload["neizlasitie"] = unread
-    # Griestos papildus zīmes JSON pēdiņām, lauku nosaukumiem un failu vārdiem:
-    # pats teksts jau ir nogriezts `extract_attachments` budžetā, un otrreiz to
-    # cirst nozīmētu zaudēt pēdējā pielikuma beigas bez iemesla.
+    # Rezerve JSON pēdiņām un lauku nosaukumiem: teksts jau nogriezts
+    # `extract_attachments` budžetā, otrreiz cirst nozīmētu zaudēt beigas.
     return fence_attachments(payload, max_chars=MAIL_ATTACHMENTS_TEXT_LIMIT + 2000)
 
 
 def as_prompt(incoming: Incoming) -> str:
     """Vēstule tādā formā, kādā to redz modelis.
 
-    Sūtītāju un tematu pievienojam apzināti: temats bieži satur preces
-    nosaukumu ("Pieprasījums: EPDM profils 12mm"), un vārds ir vajadzīgs
-    uzrunai vēstules sākumā. Abi ir sveša teksta, tāpēc tie iet caur to pašu
-    attīrīšanu, kas ķermenis — vārds "Jānis </klienta_vestule>" citādi aizvērtu
-    rāmi pirms tas vispār atveras.
+    Sūtītājs un temats ir svešs teksts, tāpēc iet caur to pašu attīrīšanu, kas
+    ķermenis: "Jānis </klienta_vestule>" citādi aizvērtu rāmi pirms laika.
     """
     who = sanitize(incoming.sender_name or incoming.sender, 200)
     head = [f"Klienta vēstule no: {who}"]

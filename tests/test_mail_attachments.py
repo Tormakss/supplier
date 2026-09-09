@@ -117,6 +117,23 @@ def test_dxf_labels_are_read_without_the_geometry() -> None:
     assert "125.5" not in text
 
 
+def test_dxf_drops_the_cad_internals() -> None:
+    """Kods 1 `HEADER` un `CLASSES` sadaļās ir CAD klases nosaukums, ne
+    uzraksts. Bez sadaļu filtra tieši tas aizgāja modelim rasējuma vietā."""
+    text, _ = extract_text("detala.dxf", "", make_dxf(["EPDM 12x20"]))
+    assert "EPDM 12x20" in text
+    for noise in ("AC1015", "ANSI_1252", "ACDBDICTIONARYWDFLT", "ObjectDBX", "*Model_Space"):
+        assert noise not in text
+
+
+def test_dxf_without_labels_stays_with_the_manager() -> None:
+    """Flat pattern ir tikai līnijas. DXF attēlot mēs neprotam, tāpēc tāds
+    rasējums godīgi paliek cilvēkam, nevis izliekas par izlasītu."""
+    text, note = extract_text("flat-pattern.dxf", "", make_dxf([]))
+    assert text == ""
+    assert "bez uzrakstiem" in note
+
+
 def test_dxf_repeats_are_not_sent_twice() -> None:
     """Rāmja uzraksts rasējumā atkārtojas katrā izkārtojumā."""
     text, _ = extract_text("detala.dxf", "", make_dxf(["EPDM 12x20", "EPDM 12x20"]))

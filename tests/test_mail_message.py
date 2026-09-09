@@ -201,7 +201,7 @@ def test_attachment_text_reaches_the_model() -> None:
     data = make_xlsx([["Prece", "Skaits"], ["EPDM D12", 358]])
     incoming = parse_message(build(attachments=[("spec.xlsx", data)]))
 
-    assert incoming.attachment_names == ["spec.xlsx"]
+    assert incoming.attachments[0].name == "spec.xlsx"
     assert incoming.attachments[0].read
     prompt = as_prompt(incoming)
     assert "EPDM D12 | 358" in prompt

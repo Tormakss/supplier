@@ -1,20 +1,15 @@
 """Mērvienība: metri, kvadrātmetri vai gabali.
 
-Veikala datos mērvienības NAV. Ne Store API (`prices`, `attributes`,
-`add_to_cart`), ne produkta lapā nav neviena lauka, kas pateiktu, vai 2.50 €
-ir par metru vai par gabalu — pārbaudīts pret dzīvo katalogu. Tāpēc tā ir
-biznesa patiesība, kas jātur šeit un jāpieliek klāt katrā sinhronizācijā.
-
-Kamēr tās nebija, VISI 3568 produkti bija `gab`, un piedāvājumos aizgāja
-"4.35 € bez PVN / gab." par blīvēšanas profilu, ko klients pērk metros.
+Veikala datos mērvienības NAV — pārbaudīts pret dzīvo katalogu. Tā ir biznesa
+patiesība, kas jāpieliek katrā sinhronizācijā; bez tās viss bija `gab`, un
+piedāvājumā aizgāja "4.35 € / gab." par profilu, ko pērk metros.
 
 Divi slāņi:
-  1. `RULES` — kategoriju likumi, pirmā sakritība uzvar. Tie sedz ģimenes.
-  2. `data/units.csv` — SKU izņēmumi ar roku. Tie uzvar pār likumiem.
+  1. `RULES` — kategoriju likumi, pirmā sakritība uzvar.
+  2. `data/units.csv` — SKU izņēmumi ar roku, uzvar pār likumiem.
 
-Kategorijas, par kurām nav skaidrības, likumos NAV: tās paliek `gab`, un
-sistēmas prompts liek modelim tādā gadījumā prasīt apstiprinājumu iekšējā
-blokā, nevis klusi rēķināt gabalos.
+Neskaidrās kategorijas likumos NAV: tās paliek `gab`, un prompts liek modelim
+prasīt apstiprinājumu, ne klusi rēķināt gabalos.
 """
 
 from __future__ import annotations
@@ -41,11 +36,8 @@ LABELS = {M: "m", M2: "m²", PIECE: "gab."}
 #: Kur glabājas SKU izņēmumi.
 OVERRIDES_PATH = PROJECT_ROOT / "data" / "units.csv"
 
-#: (kategorijas ceļa daļa, mērvienība). PIRMĀ sakritība uzvar, tāpēc
-#: izņēmumiem jābūt pirms plašākā likuma — "Šļūteņu balsti" ir gabali, kaut
-#: gan viss pārējais "Šļūtenes un aprīkojums" ir metri.
-#:
-#: Salīdzinām pret PILNO kategorijas ceļu, bez diakritikas, mazajiem burtiem.
+#: (kategorijas ceļa daļa, mērvienība). PIRMĀ sakritība uzvar, tāpēc izņēmumi
+#: raksta pirms plašākā likuma. Salīdzina pret PILNO ceļu, bez diakritikas.
 RULES: list[tuple[str, str]] = [
     # --- izņēmumi pirms plašajiem likumiem -------------------------------
     ("slutenu balsti", PIECE),          # turētāji, nevis šļūtene
@@ -81,8 +73,7 @@ RULES: list[tuple[str, str]] = [
 def _fold(text: str) -> str:
     """Mazie burti bez diakritikas — tāpat kā meklēšanas pusē.
 
-    Kategoriju nosaukumos ir gan "Šļūtenes", gan "Slutenes", gan HTML
-    entītijas; likumus rakstīt ar visām garumzīmēm nozīmētu tos uzturēt divreiz.
+    Kategorijās ir gan "Šļūtenes", gan "Slutenes", gan HTML entītijas.
     """
     decomposed = unicodedata.normalize("NFKD", (text or "").lower())
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
@@ -100,8 +91,8 @@ def category_unit(category: str) -> str:
 def load_overrides(path: Path | str | None = None) -> dict[str, str]:
     """SKU -> mērvienība no `data/units.csv`. Faila nav — nav izņēmumu.
 
-    Formāts: `sku,unit`, ar `#` komentāriem. Nederīgu mērvienību ignorējam
-    klusi: pārrakstīšanās CSV failā nedrīkst apturēt sinhronizāciju.
+    Formāts `sku,unit`. Nederīgu vērtību ignorējam klusi: pārrakstīšanās CSV
+    failā nedrīkst apturēt sinhronizāciju.
     """
     target = Path(path) if path else OVERRIDES_PATH
     if not target.exists():
@@ -134,9 +125,8 @@ def apply_units(
 ) -> dict[str, int]:
     """Pārrēķina `unit` visiem produktiem DB. Atgriež skaitu pa mērvienībām.
 
-    Atsevišķi no sinhronizācijas tāpēc, ka likumu labojums nedrīkst prasīt
-    pilnu kataloga pārvilkšanu no jauna — `data/units.csv` labo ar roku, un
-    izmaiņai jāaiziet DB dažās sekundēs.
+    Atsevišķi no sinhronizācijas: likumu labojums nedrīkst prasīt pilnu
+    kataloga pārvilkšanu no jauna.
     """
     if overrides is None:
         overrides = load_overrides()

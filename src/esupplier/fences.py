@@ -1,18 +1,12 @@
 """Kur beidzas mūsu teksts un sākas svešs.
 
-Klienta vēstule un jo īpaši pielikuma saturs ir teksts, ko rakstīja kāds cits.
-PDF failā var būt "aizmirsti iepriekšējos norādījumus", un faila nosaukumu
-izvēlas sūtītājs. Kamēr tas viss gāja promptā kā parasts teksts, robežas starp
-mūsu norādījumiem un svešu tekstu nebija nekādas.
+Iežogošanu dara `vendor/fencing.py` (Anthropic `commerce-agents`, ievests
+nemainīts). Šeit ir MŪSU puse: birkas, paziņojumi promptam un tas, kas tiek
+iežogots.
 
-Iežogošanu dara `vendor/fencing.py` — Anthropic `commerce-agents` modulis, kas
-ievests nemainīts. Šeit ir tikai MŪSU puse: birkas, paziņojumi promptam un tas,
-kas tieši tiek iežogots.
-
-Birkas ir avota literāļi, nekad no ienākošiem datiem — tieši tāpēc svešs teksts
-rāmja robežu atkārtot nevar. Rāmju ir divi, un katrs teksts tiek attīrīts ar
-ABU birkām: citādi pielikums varētu uzrakstīt vēstules rāmja beigas un izlikties
-par klienta paša teikto.
+Birkas ir avota literāļi, nekad no ienākošiem datiem. Katrs teksts tiek
+attīrīts ar ABU rāmju birkām: citādi pielikums varētu uzrakstīt vēstules rāmja
+beigas un izlikties par klienta paša teikto.
 """
 
 from __future__ import annotations
@@ -59,9 +53,7 @@ _FENCES = (LETTER_FENCE, ATTACHMENT_FENCE)
 def sanitize(text: str, max_chars: int | None = None) -> str:
     """Teksts, kas drīkst nonākt promptā jebkur — arī ārpus rāmja.
 
-    Iet caur abu rāmju attīrīšanu, tāpēc nevienu no robežām atkārtot nevar.
-    Griestus liek tikai pēdējais gājiens: divreiz apcirsts teksts dabūtu divas
-    apcirpšanas piezīmes.
+    Griestus liek tikai pēdējais gājiens: citādi būtu divas apcirpšanas piezīmes.
     """
     for fence in _FENCES[:-1]:
         text = fence.sanitize_text(text)
@@ -69,11 +61,7 @@ def sanitize(text: str, max_chars: int | None = None) -> str:
 
 
 def fence_letter(text: str, max_chars: int) -> str:
-    """Klienta vēstule savā rāmī, kā teksts.
-
-    Teksts, ne JSON: vēstule ir brīva forma, un JSON pēdiņās tā modelim kļūst
-    par vienu garu rindu ar `\\n` vietā, kur klients lika rindkopu.
-    """
+    """Klienta vēstule savā rāmī, kā teksts, ne JSON: rindkopas paliek rindkopas."""
     return LETTER_FENCE.fence_payload(
         ATTACHMENT_FENCE.sanitize_text(text), max_chars=max_chars
     )
@@ -82,10 +70,8 @@ def fence_letter(text: str, max_chars: int) -> str:
 def fence_attachments(payload: Any, max_chars: int) -> str:
     """Pielikumi savā rāmī, kā JSON.
 
-    JSON tāpēc, ka faila nosaukums un saturs ir divi atsevišķi lauki. Ar mūsu
-    pašu rakstītiem atdalītājiem ("--- PIELIKUMS x ---") pielikums varētu tādu
-    rindu uzrakstīt pats un izlikties par nākamo failu; JSON pēdiņās tas ir
-    tikai teksts.
+    Ar pašu rakstītiem atdalītājiem pielikums varētu tādu rindu uzrakstīt pats
+    un izlikties par nākamo failu; JSON pēdiņās tas ir tikai teksts.
     """
     return ATTACHMENT_FENCE.fence_payload(
         LETTER_FENCE.sanitize_value(payload), max_chars=max_chars

@@ -1,15 +1,7 @@
 """Pielikumi: MIME daļa -> teksts, ko var padot modelim.
 
-Rasējums, specifikācija Excel failā vai tehniskais apraksts PDF formātā ir
-puse pieprasījuma. Kamēr aģents tos neatvēra, piedāvājums tika būvēts uz
-otras puses un izskatījās pēc pilnas atbildes.
-
-Nolasām TEKSTU. Skenēts rasējums teksta nesatur, un tāds pielikums paliek
-atzīmēts kā neizlasīts: godīgs "atver ar roku" ir labāks par tukšu lapu, uz
-kuras modelis neko neredz un tāpēc klusē.
-
-Šeit dzīvo arī divi MIME palīgi (`decode_header_value`, `strip_html`), ko
-lieto arī `message.py` — tas ir slānis virsū šim.
+Nolasām TEKSTU. Kas teksta nesatur, paliek atzīmēts kā neizlasīts: godīgs
+"atver ar roku" ir labāks par klusēšanu. Attēlus atšifrē `vision.py`.
 """
 
 from __future__ import annotations
@@ -48,12 +40,10 @@ try:  # pragma: no cover — vecais Excel formāts; bez tā tas paliek cilvēkam
 except ImportError:  # pragma: no cover
     xlrd = None  # type: ignore[assignment]
 
-#: Kodējumi, ar kuriem mēģinām teksta pielikumu, ja galvenē kodējuma nav.
-#: `cp1257` ir tas, kurā Latvijā joprojām nāk vecās `.txt` un `.csv` izdrukas.
+#: Kodējumi bez galvenes. `cp1257` — vecās latviešu `.txt` un `.csv` izdrukas.
 _FALLBACK_CHARSETS = ("utf-8", "cp1257", "cp1251", "latin-1")
 
-#: Cik rindu no vienas Excel lapas vispār salasām. Zīmju limits nogrieztu tāpat,
-#: bet miljons tukšu rindu ir jāizlasa pirms griešanas.
+#: Cik rindu no Excel lapas salasām, pirms zīmju limits paspēj nogriezt.
 _MAX_SHEET_ROWS = 500
 
 _XL_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -71,13 +61,11 @@ class Attachment:
     text: str = ""
     #: Kāpēc teksta nav. Cilvēkam lasāms, aiziet menedžerim iekšējā blokā.
     note: str = ""
-    #: True, ja tekstu nolasīja modelis no attēla, ne parsētājs no faila.
-    #: Atšifrējums var kļūdīties tieši izmēros, tāpēc tas iet atzīmēts.
+    #: True, ja tekstu nolasīja modelis no attēla. Var kļūdīties izmēros.
     transcribed: bool = False
     #: Baiti, kamēr tie vēl var noderēt atšifrēšanai. Pēc tās tiek iztukšoti.
     data: bytes = b""
-    #: Ko tieši saturam baitos: `image/...` vai `application/pdf`. Tukšs =
-    #: atšifrēt nav ko, arī tad, ja pielikums palika neizlasīts.
+    #: `image/...` vai `application/pdf`. Tukšs = atšifrēt nav ko.
     image_mime: str = ""
 
     @property
@@ -102,8 +90,7 @@ def decode_header_value(value: str | None) -> str:
 
 
 def strip_html(html_text: str) -> str:
-    """Ļoti vienkāršs HTML -> teksts. Pietiek: tas ir tikai atkāpšanās ceļš,
-    kad vēstulē nav `text/plain` daļas."""
+    """Vienkāršs HTML -> teksts. Atkāpšanās ceļš, kad nav `text/plain` daļas."""
     text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html_text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|tr|li|h[1-6])\s*>", "\n", text)
@@ -123,11 +110,7 @@ def _decode_bytes(data: bytes, charset: str = "") -> str:
 
 
 def _tidy(text: str) -> str:
-    """Nost liekās atstarpes un tukšās rindas.
-
-    Izvilktais teksts nāk ar dokumenta izkārtojuma pēdām — desmitiem tukšu
-    rindu starp tabulas gabaliem. Modelim par tām jāmaksā ar tokeniem.
-    """
+    """Nost liekās atstarpes un tukšās rindas — par tām maksā ar tokeniem."""
     lines = [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     text = "\n".join(lines)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -151,7 +134,7 @@ def _from_pdf(data: bytes) -> tuple[str, str]:
         return "", f"PDF neizdevās atvērt ({type(exc).__name__})"
     text = _tidy("\n".join(pages))
     if not text:
-        # Skenēts rasējums ir bilde PDF iepakojumā. Teksta tur nav un nebūs.
+        # Skenēts rasējums ir bilde PDF iepakojumā; to atšifrē `vision.py`.
         return "", "PDF bez teksta (skenēts vai rasējums) — jāatver ar roku"
     return text, ""
 
@@ -166,7 +149,7 @@ def _from_docx(data: bytes) -> tuple[str, str]:
     xml = re.sub(r"(?i)<w:br\b[^>]*/?>", "\n", xml)
     xml = xml.replace("</w:p>", "\n").replace("</w:tc>", " | ").replace("</w:tr>", "\n")
     text = html.unescape(re.sub(r"<[^>]+>", "", xml))
-    # Rindkopas beigas tabulas šūnā uzmeta jaunu rindu pirms atdalītāja.
+    # Rindkopas beigas šūnā uzmeta jaunu rindu pirms atdalītāja.
     text = re.sub(r"[ \t]*\n[ \t]*\|", " |", text)
     text = re.sub(r"(?m)^\s*\|\s*$", "", text)
     text = re.sub(r"(?m)\s*\|\s*$", "", text)  # tabulas rindas aste
@@ -187,9 +170,7 @@ def _xlsx_shared_strings(archive: zipfile.ZipFile) -> list[str]:
 def _xlsx_sheets(archive: zipfile.ZipFile) -> list[tuple[str, str]]:
     """[(lapas nosaukums, ceļš arhīvā)] darbgrāmatas secībā.
 
-    Secība nāk no `workbook.xml`, ne no failu nosaukumiem: `sheet1.xml` nav
-    obligāti pirmā lapa, un lapas nosaukums ("Specifikācija") modelim pasaka
-    vairāk nekā "sheet2".
+    Secība nāk no `workbook.xml`: `sheet1.xml` nav obligāti pirmā lapa.
     """
     try:
         book = ElementTree.fromstring(archive.read("xl/workbook.xml"))
@@ -328,8 +309,7 @@ def _from_xls(data: bytes) -> tuple[str, str]:
     return text, ""
 
 
-#: RTF grupas, kuru saturs ir dokumenta iekšas, ne teksts: fontu tabula, stili,
-#: iegultā bilde. Bez šī izraksta modelim aizietu fontu nosaukumi un hex bloki.
+#: RTF grupas, kuru saturs ir dokumenta iekšas: fontu tabula, stili, bildes.
 _RTF_SKIP = frozenset(
     {
         "fonttbl", "colortbl", "stylesheet", "info", "pict", "object", "themedata",
@@ -344,8 +324,8 @@ _RTF_HEX = re.compile(r"\\'([0-9a-fA-F]{2})")
 def _rtf_to_text(raw: str) -> str:
     r"""RTF -> teksts. Pietiekami, lai izlasītu pieprasījumu, ne lai atveidotu.
 
-    Rakstīts ar roku, ne ar regulāro izteiksmi: `{\*\pict ...}` iekšas jāizlaiž
-    veselas, un tas prasa zināt, kurā grupas dziļumā atrodamies.
+    Ar roku, ne ar regulāro izteiksmi: `{\*\pict ...}` jāizlaiž veselas, un tas
+    prasa zināt grupas dziļumu.
     """
     out: list[str] = []
     depth = 0
@@ -423,22 +403,49 @@ _DXF_TEXT_CODES = ("1", "3")
 _DXF_FORMAT = re.compile(r"\\[A-Za-z][^;\\]*;")
 
 
+#: Sadaļas, kurās DXF glabā to, ko cilvēks rasējumā redz. `HEADER` un
+#: `CLASSES` iekšā kods 1 ir CAD klases nosaukums, ne uzraksts.
+_DXF_SECTIONS = ("ENTITIES", "BLOCKS")
+
+#: Entītijas, kurās kods 1 vai 3 ir cilvēka rakstīts teksts. Bez šī no
+#: `BLOCKS` iznāca bloku nosaukumi (`*Model_Space`).
+_DXF_TEXT_ENTITIES = frozenset(
+    {"TEXT", "MTEXT", "ATTDEF", "ATTRIB", "DIMENSION", "MLEADER", "MULTILEADER", "TOLERANCE"}
+)
+
+
 def _from_dxf(data: bytes) -> tuple[str, str]:
     """ASCII DXF: uzraksti, izmēru atzīmes un tabulas rindas no rasējuma.
 
-    Ģeometriju izlaižam apzināti. Koordinātas modelim neko nepasaka, bet
-    uzraksts "EPDM 12x20, 358 gab." rasējuma stūrī ir pats pieprasījums.
+    Ģeometriju izlaižam apzināti: koordinātas modelim neko nepasaka.
     """
     if data[:18] == b"AutoCAD Binary DXF":
         return "", "binārs DXF rasējums — jāatver ar roku"
     lines = [line.strip() for line in _decode_bytes(data).splitlines()]
     values: list[str] = []
     seen: set[str] = set()
+    section = ""
+    entity = ""
+    expect_section = False
     index = 0
     while index < len(lines) - 1:
         code, value = lines[index], lines[index + 1]
         if not code.lstrip("-").isdigit():
             index += 1
+            continue
+        index += 2
+
+        if code == "0":
+            entity = value.upper()
+            if value == "SECTION":
+                expect_section = True
+            elif value == "ENDSEC":
+                section = ""
+            continue
+        if code == "2" and expect_section:
+            section, expect_section = value.upper(), False
+            continue
+        if section not in _DXF_SECTIONS or entity not in _DXF_TEXT_ENTITIES:
             continue
         if code in _DXF_TEXT_CODES and value:
             cleaned = _DXF_FORMAT.sub("", value.replace("\\P", "\n"))
@@ -447,9 +454,9 @@ def _from_dxf(data: bytes) -> tuple[str, str]:
             if cleaned and cleaned not in seen:
                 seen.add(cleaned)
                 values.append(cleaned)
-        index += 2
     text = _tidy("\n".join(values))
     if not text:
+        # Rasējums bez uzrakstiem ir tikai līnijas, un DXF attēlot neprotam.
         return "", "DXF rasējums bez uzrakstiem — jāatver ar roku"
     return text, ""
 
@@ -490,8 +497,7 @@ def _convert_with_soffice(data: bytes, suffix: str, target: str) -> tuple[bytes,
 def _from_ole(data: bytes, suffix: str) -> tuple[str, str]:
     """Vecais `.doc`, `.xls`, `.ppt` — OLE konteiners, ne ZIP.
 
-    `.xls` prot `xlrd`. Pārējos izlasa tikai LibreOffice, un tā uz servera var
-    nebūt; tad pielikums paliek cilvēkam ar godīgu iemeslu.
+    `.xls` prot `xlrd`; pārējos tikai LibreOffice, kuras uz servera var nebūt.
     """
     label = _KNOWN_BINARY.get(suffix, "vecais Office formāts")
 
@@ -538,9 +544,8 @@ def _zip_members(data: bytes) -> tuple[list[tuple[str, bytes | None]], bool] | N
             try:
                 members.append((info.filename, archive.read(info)))
             except (RuntimeError, zipfile.BadZipFile, OSError):
-                # Parolēts vai bojāts ieraksts. `None` to atšķir no tukša
-                # faila: iemesls menedžerim ir dažāds, un tukšs fails nav
-                # tas pats, kas fails, kuru mums neļāva atvērt.
+                # `None` atšķir parolētu ierakstu no tukša faila: menedžerim
+                # tā ir starpība.
                 members.append((info.filename, None))
     return members, truncated
 
@@ -578,9 +583,7 @@ def _rar_members(data: bytes) -> tuple[list[tuple[str, bytes]], bool] | None:
 def archive_members(name: str, data: bytes) -> tuple[list[tuple[str, bytes | None]], bool] | None:
     """Arhīva saturs vai `None`, ja tas nav arhīvs (vai to atvērt nevaram).
 
-    Rasējumu komplekts nāk ZIP failā, un līdz šim tas viss palika aiz durvīm.
-    Iekšējie faili tālāk iet pa to pašu ceļu, kas pielikumi — arī skenēts
-    rasējums ZIP failā nonāk pie atšifrēšanas.
+    Iekšējie faili iet pa to pašu ceļu, kas pielikumi — arī līdz atšifrēšanai.
     """
     lower = name.lower()
     if lower.endswith(".7z"):
@@ -588,8 +591,8 @@ def archive_members(name: str, data: bytes) -> tuple[list[tuple[str, bytes | Non
     if lower.endswith(".rar"):
         return _rar_members(data)
     if data[:4] == b"PK\x03\x04":
-        # `.docx`, `.xlsx` un `.pptx` arī ir ZIP faili. Izpakot tos nozīmētu
-        # padot modelim `[Content_Types].xml` tur, kur bija specifikācija.
+        # `.docx`, `.xlsx`, `.pptx` arī ir ZIP: izpakot nozīmētu padot
+        # modelim `[Content_Types].xml` specifikācijas vietā.
         return _zip_members(data) if _sniff_zip(data) == "zip" else None
     if lower.endswith(".zip"):
         return _zip_members(data)
@@ -598,8 +601,7 @@ def archive_members(name: str, data: bytes) -> tuple[list[tuple[str, bytes | Non
 
 # --- ko mums iedeva --------------------------------------------------------
 def _sniff_zip(data: bytes) -> str:
-    """ZIP iekšpuse pasaka, kas tas ir. Nosaukums mēdz melot: `.doc` fails, ko
-    Word saglabāja kā `.docx`, ir ikdiena."""
+    """ZIP iekšpuse pasaka, kas tas ir; nosaukums mēdz melot."""
     try:
         with zipfile.ZipFile(BytesIO(data)) as archive:
             names = set(archive.namelist())
@@ -636,13 +638,11 @@ def _sniff(data: bytes) -> str:
     return ""
 
 
-#: Paplašinājumi, kuriem pat `application/octet-stream` nozīmē tekstu. Pasta
-#: klienti tipu bieži nesaka vispār, tāpēc formātu izšķir nosaukums.
+#: Paplašinājumi, kuriem `application/octet-stream` tomēr nozīmē tekstu.
 _TEXT_SUFFIXES = (".txt", ".csv", ".md", ".log", ".json", ".xml", ".yml", ".yaml", ".ini")
 _HTML_SUFFIXES = (".html", ".htm")
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic")
-#: Formāti, kurus atvērt nemākam, bet par kuriem zinām, kas tie ir — menedžerim
-#: derīgāks ir "vecais Word formāts" nekā "nezināms fails".
+#: Formāti, kurus atvērt nemākam, bet varam nosaukt vārdā.
 _KNOWN_BINARY = {
     ".doc": "vecais Word formāts",
     ".xls": "vecais Excel formāts",
@@ -688,12 +688,7 @@ def _kind_from_name(suffix: str, ctype: str) -> str:
 
 
 def file_kind(name: str, content_type: str, data: bytes) -> str:
-    """Ko mums iedeva. Baiti sver vairāk par nosaukumu.
-
-    Pasta klients paziņo `application/octet-stream` biežāk, nekā pasaka
-    patiesību, un klients savu `.docx` nosauc par `.doc`. Baitus neviens no
-    abiem nemaina.
-    """
+    """Ko mums iedeva. Baiti sver vairāk par nosaukumu un par MIME tipu."""
     lower = name.lower()
     suffix = lower[lower.rfind(".") :] if "." in lower else ""
     return _sniff(data) or _kind_from_name(suffix, (content_type or "").lower())
@@ -728,13 +723,10 @@ def extract_text(name: str, content_type: str, data: bytes, charset: str = "") -
         text = _tidy(_decode_bytes(data, charset))
         return (text, "") if text else ("", "tukšs fails")
     if kind == "image":
-        # Teksta slāņa attēlā nav un nebūs. Izlasīt to var tikai paskatoties —
-        # to dara `vision.transcribe`, un tikai tad šī piezīme pazūd.
+        # Izlasīt var tikai paskatoties; to dara `vision.transcribe`.
         return "", "attēls — teksta tajā nav, jāatver ar roku"
     if kind in ("zip", "archive"):
-        # Šeit nokļūst tikai tas, ko `extract_attachments` izpakot nespēja.
-        # Iemesls ir vai nu trūkstošs lasītājs, vai bojāts fails, un menedžerim
-        # tā ir starpība: pirmo var salabot uz servera, otro ne.
+        # Trūkstošs lasītājs vai bojāts fails: pirmo var salabot uz servera.
         if suffix == ".7z":
             missing = importlib.util.find_spec("py7zr") is None
             return "", "7z arhīvs — " + (
@@ -759,8 +751,7 @@ def _make_attachment(
 ) -> Attachment:
     """Viens pielikums ar visu, ko no tā izdevās izlasīt bez tīkla.
 
-    `data is None` nozīmē, ka baitus dabūt neizdevās — parolēts ieraksts
-    arhīvā. Tas nav tas pats, kas tukšs fails, un menedžerim tas jāredz.
+    `data is None` = baitus dabūt neizdevās (parolēts ieraksts arhīvā).
     """
     if data is None:
         return Attachment(
@@ -790,9 +781,8 @@ def _make_attachment(
 def apply_budget(items: list[Attachment]) -> None:
     """Nogriež pielikumu tekstu pa vienam un kopā. Maina sarakstu uz vietas.
 
-    Atsevišķa funkcija tāpēc, ka atšifrējums pienāk vēlāk, jau pēc izpakošanas,
-    un arī tas jāieskaita tajā pašā budžetā. Divi 40 lapu PDF faili citādi
-    izspiestu no konteksta pašu vēstuli, kuras dēļ viss notiek.
+    Atsevišķa funkcija tāpēc, ka atšifrējums pienāk vēlāk un ieskaitās tajā
+    pašā budžetā.
     """
     budget = MAIL_ATTACHMENTS_TEXT_LIMIT
     for item in items:
@@ -813,8 +803,7 @@ def apply_budget(items: list[Attachment]) -> None:
 def extract_attachments(msg: EmailMessage) -> list[Attachment]:
     """Visi vēstules pielikumi ar izvilkto tekstu.
 
-    Arhīvs šeit pazūd un tā vietā parādās tas, kas bija iekšā: rasējumu ZIP
-    fails pats par sevi nav pieprasījums, bet katrs fails tajā var būt.
+    Arhīvs pazūd, un tā vietā parādās tas, kas bija iekšā.
     """
     found: list[Attachment] = []
     for part in msg.walk():
@@ -835,7 +824,7 @@ def extract_attachments(msg: EmailMessage) -> list[Attachment]:
 
         members, truncated = unpacked
         for member_name, member_data in members:
-            # Vārds paliek salikts: menedžerim jāzina, kurā arhīvā to meklēt.
+            # Vārds paliek salikts: jāzina, kurā arhīvā failu meklēt.
             found.append(_make_attachment(f"{name} → {member_name}", "", member_data, ""))
         if not members:
             found.append(

@@ -166,8 +166,23 @@ def make_zip(files: list[tuple[str, bytes]]) -> bytes:
 
 
 def make_dxf(labels: list[str]) -> bytes:
-    """ASCII DXF ar TEXT entītijām un vienu koordinātu pāri katrai."""
-    lines = ["0", "SECTION", "2", "ENTITIES"]
+    """ASCII DXF, kāds tas nāk no CAD: vispirms sadaļas, kurās kods 1 ir
+    programmas iekšas, tad `ENTITIES` ar īstajiem uzrakstiem."""
+    lines = [
+        "0", "SECTION", "2", "HEADER",
+        "9", "$ACADVER", "1", "AC1015",
+        "9", "$DWGCODEPAGE", "3", "ANSI_1252",
+        "0", "ENDSEC",
+        "0", "SECTION", "2", "CLASSES",
+        "0", "CLASS", "1", "ACDBDICTIONARYWDFLT", "2", "AcDbDictionaryWithDefault",
+        "3", "ObjectDBX Classes",
+        "0", "ENDSEC",
+        "0", "SECTION", "2", "BLOCKS",
+        "0", "BLOCK", "2", "*Model_Space", "1", "", "3", "*Model_Space",
+        "0", "ENDBLK",
+        "0", "ENDSEC",
+        "0", "SECTION", "2", "ENTITIES",
+    ]
     for label in labels:
         lines += ["0", "TEXT", "8", "0", "10", "125.5", "20", "40.0", "1", label]
     lines += ["0", "ENDSEC", "0", "EOF"]

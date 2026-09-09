@@ -66,6 +66,9 @@ def photo(name: str = "foto.png") -> Attachment:
 @pytest.fixture(autouse=True)
 def vision_on(monkeypatch):
     monkeypatch.setattr(vision, "MAIL_ATTACHMENT_VISION", True)
+    # Dzinēju piesienam apzināti. Bez tā `_ask` aizietu pa `claude` ceļu, kur
+    # viltus klientu neviens neskatās, un testi klusi sāktu iet tīklā.
+    monkeypatch.setattr(vision, "ENGINE", "openai")
 
 
 # --- attēla sagatavošana ---------------------------------------------------
@@ -196,3 +199,27 @@ def test_only_a_few_images_per_letter_are_transcribed(monkeypatch) -> None:
     assert sum(1 for item in items if item.transcribed) == 2
     assert len(client.calls) == 2
     assert "vairāk nekā 2 attēli" in items[2].note
+
+
+def test_engine_decides_who_transcribes(monkeypatch) -> None:
+    """Viens `transcribe`, divi dzinēji. Ja izvēle nokļūtu izsaukuma vietā,
+    `mail/run.py` sāktu zināt, kurš modelis tur ir zem apakšas."""
+    seen: list[str] = []
+    monkeypatch.setattr(vision, "_ask_claude", lambda images: seen.append("claude") or "teksts")
+    monkeypatch.setattr(
+        vision, "_ask_openai", lambda client, images: seen.append("openai") or "teksts"
+    )
+
+    monkeypatch.setattr(vision, "ENGINE", "claude")
+    vision.transcribe([scan()], client=None)
+    monkeypatch.setattr(vision, "ENGINE", "openai")
+    vision.transcribe([scan()], FakeClient())
+
+    assert seen == ["claude", "openai"]
+
+
+def test_claude_path_needs_no_client() -> None:
+    """Abonementa ceļā klienta objekta nav vispār, un `None` nedrīkst nokrist
+    kā kļūda pielikuma piezīmē."""
+    item = scan()
+    assert item.can_transcribe

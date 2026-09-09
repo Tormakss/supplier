@@ -1,11 +1,4 @@
-"""Melnraksta salikšana: aģenta atbilde -> MIME vēstule.
-
-Melnrakstā ir TIKAI vēstule klientam. Iekšējās piezīmes tajā nenonāk nemaz:
-melnraksts ir domāts nosūtīšanai bez labošanas, un katrs bloks, kas pirms tam
-jāizdzēš ar roku, agri vai vēlu paliek neizdzēsts.
-
-Piezīmes aiziet konsolē un blakus failā `atbildes/*-IEKSEJI.txt`.
-"""
+"""Melnraksta salikšana: aģenta atbilde -> MIME vēstule."""
 
 from __future__ import annotations
 
@@ -17,12 +10,11 @@ from .. import report
 from ..config import IMAP_USER
 from .message import Incoming
 
-#: Uzruna melnraksta priekšmetā, kad oriģinālam temata nav.
 _NO_SUBJECT = "Jūsu pieprasījums"
 
 
 def reply_subject(subject: str) -> str:
-    """`Re:` bez dublēšanās. "Re: Re: Re:" izskatās pēc robota, un tas te ir."""
+    """`Re:` bez dublēšanās."""
     clean = (subject or "").strip()
     if not clean:
         return f"Re: {_NO_SUBJECT}"
@@ -34,8 +26,7 @@ def reply_subject(subject: str) -> str:
 
 
 def _references(incoming: Incoming) -> str:
-    """`References` ķēde. Bez tās klienta pasta klients atbildi rāda kā jaunu
-    sarunu, un sarakste sadalās divās vietās."""
+    """`References` ķēde. Bez tās klienta pasta klients atbildi rāda kā jaunu sarunu."""
     chain = [ref for ref in incoming.references.split() if ref]
     if incoming.message_id and incoming.message_id not in chain:
         chain.append(incoming.message_id)
@@ -51,9 +42,9 @@ def build_draft(
 ) -> EmailMessage:
     """Melnraksts kā atbilde uz `incoming`.
 
-    `letter` ir TIKAI klientam sūtāmā daļa (skat. `report.split_answer`) ar jau
-    pārbaudītām bildēm. Šī funkcija atbildi vairs nešķiro — ja iekšējais teksts
-    atnāk `letter` argumentā, tas aizies klientam.
+    `letter` ir TIKAI klientam sūtāmā daļa (skat. `report.split_answer`). Šī
+    funkcija atbildi vairs nešķiro — iekšējais teksts `letter` argumentā aizies
+    klientam.
     """
     msg = EmailMessage()
     from_address = sender or IMAP_USER
@@ -69,8 +60,6 @@ def build_draft(
     chain = _references(incoming)
     if chain:
         msg["References"] = chain
-    # Melnraksts, ko uzrakstīja aģents. Pasta klientos šī galvene neredzas, bet
-    # pastkastītes revīzijā tā ir vienīgā pēda, kas atšķir cilvēka rakstīto.
     msg["X-Esupplier-Agent"] = "draft"
 
     msg.set_content(letter)

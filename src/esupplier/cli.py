@@ -34,8 +34,7 @@ Komandas:
   /exit      iziet (arī Ctrl+D tukšā ievadē)\
 """
 
-#: Rindas, kas nobeidz daudzrindu ievadi. `.` ir mail(1) mantojums un to zina
-#: katrs, kas kādreiz sūtījis vēstuli no termināļa.
+#: Rindas, kas nobeidz daudzrindu ievadi. `.` ir mail(1) mantojums.
 _SUBMIT = {".", "/send", "/suti", "/sūti"}
 
 
@@ -125,10 +124,8 @@ def _save_answer(
 def _autosave(console: Console, text: str, conn: Any) -> None:
     """Klusi saglabā vēstuli kā HTML un izdrukā ceļu.
 
-    Foto, tabulu robežas un pareizais formatējums dzīvo tikai HTML failā —
-    terminālī no bildes paliek ikona, un tabulu Rich lauž pēc ekrāna platuma.
-    Kamēr tas prasīja atsevišķu `/save`, menedžeris pusē gadījumu piedāvājumu
-    kopēja no termināļa un bildes klientam neaizgāja vispār.
+    Foto un tabulu robežas dzīvo tikai HTML failā. Kamēr tas prasīja atsevišķu
+    `/save`, menedžeris kopēja no termināļa un bildes neaizgāja vispār.
     """
     letter, _internal = report.split_answer(text)
     if not letter.strip():
@@ -139,8 +136,7 @@ def _autosave(console: Console, text: str, conn: Any) -> None:
         console.print(f"[yellow]! Neizdevās saglabāt HTML: {exc}[/yellow]")
         return
 
-    # Ceļu rādām kā file:// saiti — terminālī tā ir klikšķināma, un pārlūkā
-    # atveras tas pats, ko menedžeris ielīmēs e-pastā.
+    # file:// saite ir terminālī klikšķināma.
     uri = path.resolve().as_uri()
     console.print(f"[green]Vēstule ar bildēm:[/green] [link={uri}]{path}[/link]")
     if dropped:
@@ -153,14 +149,8 @@ def _autosave(console: Console, text: str, conn: Any) -> None:
 def _read_message(console: Console) -> str | None:
     """Nolasa VIENU ziņu, kas var būt vairākas rindas. None = jāiziet.
 
-    Ar vienkāršu `input()` katra ielīmētās vēstules rinda kļuva par atsevišķu
-    gājienu: uz "Здравствуйте!" aizgāja viena atbilde, uz parakstu — nākamā,
-    un klients par vienu pieprasījumu būtu saņēmis piecas vēstules. E-pasta
-    ķermenis ir viena ziņa, tāpēc lasām līdz atdalītājam vai EOF, nevis līdz
-    pirmajam Enter.
-
-    Tukša rinda ievadi NEBEIDZ — e-pastā tukšas rindas ir starp sveicienu,
-    tekstu un parakstu.
+    Ar `input()` katra ielīmētās vēstules rinda kļūtu par atsevišķu gājienu.
+    Tukša rinda ievadi NEBEIDZ: e-pastā tādas ir starp sveicienu un parakstu.
     """
     lines: list[str] = []
     while True:
@@ -196,9 +186,7 @@ def _read_message(console: Console) -> str | None:
 def _run_units(console: Console, conn: Any) -> None:
     """Pārrēķina `unit` visiem produktiem pēc likumu vai CSV labošanas.
 
-    Atsevišķi no `/sync` tāpēc, ka mērvienība ir mūsu dati, ne veikala:
-    izņēmuma pierakstīšana `data/units.csv` nedrīkst prasīt visa kataloga
-    pārvilkšanu no jauna.
+    Atsevišķi no `/sync`: mērvienība ir mūsu dati, ne veikala.
     """
     from .catalog import units
 
@@ -272,8 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             if verbose:
                 _print_tool_calls(console, result.tool_calls, verbose=True)
             console.print()
-            # Bilžu URL konsolē neliekam — tie izstiepj tabulu pāri ekrānam.
-            # 📷 ir saite; pati bilde ir HTML failā, ko saglabājam zemāk.
+            # Bilžu URL izstieptu tabulu pāri ekrānam; 📷 ir saite.
             console.print(Markdown(report.for_console(result.text)))
             console.print()
             for leak in report.contact_leaks(result.text):
@@ -281,8 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"[yellow]! Vēstulē klientam ir mūsu iekšējā adrese — "
                     f"izņem pirms sūtīšanas: {leak}[/yellow]"
                 )
-            # Artikuls vai cena, ko neviens rīks neatdeva. Promptā aizliegums ir
-            # no paša sākuma; šī ir pirmā vieta, kur to kāds tiešām salīdzina.
+            # Artikuls vai cena, ko neviens rīks neatdeva.
             seen = report.tool_provenance(result.tool_calls)
             letter_part, _ = report.split_answer(result.text)
             for sku in report.unbacked_skus(letter_part, seen.skus):
@@ -295,8 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"[yellow]! Cena {price} € nav no kataloga un no tā "
                     f"neizriet — pārbaudi.[/yellow]"
                 )
-            # Atlikuma skaitli modelis neredz, tāpēc katrs tāds vēstulē ir
-            # izdomāts — un klientam tas kļūst par solījumu.
+            # Modelis atlikumu neredz: katrs tāds skaitlis ir izdomāts solījums.
             for line in report.stock_leaks(letter_part):
                 console.print(
                     f"[yellow]! Vēstulē ir atlikuma skaitlis vai vārds — "
@@ -318,30 +303,26 @@ def main(argv: list[str] | None = None) -> int:
                     "iekšējais bloks) var trūkt. Pārjautā šaurāk.[/red]"
                 )
             elif not report.has_internal(result.text):
-                # Bloka trūkums nozīmē "menedžerim nekas nav jādara", un tieši
-                # tas ir bīstamākais klusējums: rezervācija un termiņš paliek
-                # neizdarīti, jo neviens tos neredzēja.
+                # Bloka trūkums izskatās pēc "nekas nav jādara", un rezervācija
+                # ar termiņu paliek neizdarīti.
                 console.print(
                     "[yellow]! Atbildē NAV iekšējā bloka (⚑ IEKŠĒJI). "
                     "Pārbaudi, vai tiešām nekas nav jāizdara ar roku.[/yellow]"
                 )
-            # Saglabājam VIENMĒR: bildes, tabulas un pareizais formatējums ir
-            # tikai HTML failā, un `/save` atcerēšanās nedrīkst būt priekšnoteikums
-            # tam, lai menedžeris vispār ieraudzītu foto.
+            # VIENMĒR: `/save` atcerēšanās nedrīkst būt priekšnoteikums tam,
+            # lai menedžeris vispār ieraudzītu foto.
             _autosave(console, result.text, conn)
             _print_footer(console, result)
 
-        # `--ask -` un caurule (`cat vestule.txt | esupplier`) ir tas pats:
-        # viss ķermenis ir VIENA ziņa. Šis ir īstais e-pasta ceļš, tāpēc tam
-        # jāstrādā bez termināļa un bez atdalītāja.
+        # `--ask -` un caurule ir tas pats: viss ķermenis ir VIENA ziņa, un
+        # tam jāstrādā bez termināļa un bez atdalītāja.
         question = args.ask
         if question == "-" or (question is None and not sys.stdin.isatty()):
             question = sys.stdin.read().strip()
 
         if question:
             ask(question)
-            # `ask` jau saglabāja HTML mapē atbildes/. `--save` bez ceļa tāpēc
-            # vairs nav ko darīt; ar ceļu — saglabājam vēlreiz turp, kur prasīts.
+            # `ask` jau saglabāja mapē atbildes/; ar ceļu saglabājam vēlreiz.
             if args.save:
                 _save_answer(console, last_answer, conn, args.save, open_browser=False)
             return 0

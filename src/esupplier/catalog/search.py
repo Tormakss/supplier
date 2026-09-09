@@ -14,9 +14,8 @@ from . import db
 from .models import Product
 from .normalize import normalize_material
 
-#: bm25 svari kolonnām (name, aliases, description, category, material).
-#: LIELĀKS skaitlis = lielāks svars. Aprakstam dodam gandrīz neko, jo tie ir
-#: kopēti veseliem produktu blokiem un citādi noslīcina nosaukuma sakritības.
+#: bm25 svari (name, aliases, description, category, material); lielāks = svarīgāks.
+#: Aprakstam gandrīz neko: tie ir kopēti blokiem un noslīcina nosaukumu.
 BM25_WEIGHTS = (10.0, 5.0, 0.5, 2.0, 2.0)
 
 #: Vārdi, kas FTS vaicājumā tikai trokšņo.
@@ -30,10 +29,10 @@ _STOPWORDS = {
 
 @dataclass(slots=True)
 class SearchResult:
-    """Meklēšanas rezultāts kopā ar piezīmēm par to, kā tas iegūts.
+    """Meklēšanas rezultāts ar piezīmēm par to, kā tas iegūts.
 
-    Uzvedas kā saraksts (`len`, `for`, `[0]`), lai izsaucēji, kas gaida
-    `list[Product]`, strādā bez izmaiņām.
+    Uzvedas kā saraksts (`len`, `for`, `[0]`) izsaucējiem, kas gaida
+    `list[Product]`.
     """
 
     products: list[Product] = field(default_factory=list)
@@ -44,7 +43,7 @@ class SearchResult:
     #: True, ja atlaidām arī pārējos filtrus (tikai pilnteksts).
     relaxed_filters: bool = False
     #: True, ja neviens rezultāts nesedz VISUS klienta nosauktos skaitļus.
-    #: Bez šī karoga tuvākais cits izmērs aizgāja kā atbilde uz prasīto.
+    #: Bez tā tuvākais cits izmērs aiziet kā atbilde uz prasīto.
     size_mismatch: bool = False
     fts_query: str = ""
 
@@ -97,14 +96,9 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 def _tokenize(query: str) -> list[str]:
     """Sadala lietotāja tekstu drošos marķieros.
 
-    Visu, kas nav burts vai cipars, izmetam — tas vienlaikus ir arī
-    aizsardzība pret FTS sintaksi (`DN25"` citādi uzspridzinātu parseri).
-
-    Viencipara un vienburta marķierus PATURAM. Izmēri katalogā ir tieši tādi
-    ("4", "6"), un vienburta apzīmējums ir profilu ģimenes nosaukums: "U
-    profils", "P Tips", "E Gs". Kad tas tika izmests kā troksnis, no
-    vaicājuma "U profils EPDM" palika "profils EPDM", un neviens no 30 U
-    profiliem rezultātā nenokļuva.
+    Viss, kas nav burts vai cipars, tiek izmests — tā ir arī aizsardzība pret
+    FTS sintaksi. Viencipara un vienburta marķierus PATURAM: tie ir izmēri
+    ("4") un profilu ģimenes ("U profils"), ne troksnis.
     """
     tokens = re.findall(r"[^\W_]+", query, re.UNICODE)
     return [t for t in tokens if t.lower() not in _STOPWORDS]
@@ -113,10 +107,8 @@ def _tokenize(query: str) -> list[str]:
 def token_forms(token: str) -> list[str]:
     """Kā šis marķieris var būt uzrakstīts katalogā.
 
-    Izmēru klients raksta vienā gabalā ("12x16mm"), bet katalogā tas ir gan
-    "12x16mm", gan "12×16 mm", gan daļa no "1.5x6x12mm". Tāpēc izmēru
-    marķieri meklējam arī pa atsevišķiem skaitļiem — citādi tuvākais izmērs
-    nekad neatrodas, un salīdzināt klientam nav ko.
+    Izmēru meklējam arī pa atsevišķiem skaitļiem: "12x16mm" katalogā mēdz būt
+    arī "12×16 mm" vai daļa no "1.5x6x12mm".
     """
     forms = [token]
     if _DIMENSION.match(token):
@@ -134,10 +126,9 @@ def _quote(token: str) -> str:
 
 
 def _stem(token: str) -> str:
-    """Rupjš latviešu galotņu nogriezums prefiksa meklēšanai.
+    """Rupjš latviešu galotņu nogriezums: "silikona" -> "silikon".
 
-    "silikona" -> "silikon", "šļūtenes" -> "šļūten". Ciparus saturošus
-    marķierus (DN25, 2mm) neaiztiekam — tiem galotnes nav.
+    Ciparus saturošus marķierus neaiztiekam — tiem galotnes nav.
     """
     if any(ch.isdigit() for ch in token):
         return token
@@ -151,9 +142,8 @@ def _stem(token: str) -> str:
 def _prefixable(form: str) -> bool:
     """Vai marķierim drīkst pielikt `*`.
 
-    Burtu "u" ar zvaigznīti atbilstu pusei kataloga, tāpēc īsus BURTU
-    marķierus atstājam precīzus. Skaitļiem otrādi — izmērs katalogā ir viens
-    marķieris ("12x22x25mm"), tāpēc "12" bez zvaigznītes neatrod neko.
+    Īsi BURTU marķieri paliek precīzi ("u*" atbilstu pusei kataloga); skaitļiem
+    otrādi, jo izmērs katalogā ir viens marķieris ("12x22x25mm").
     """
     return len(form) >= 3 or any(ch.isdigit() for ch in form)
 
@@ -161,8 +151,7 @@ def _prefixable(form: str) -> bool:
 def _group(forms: list[str], *, prefix: bool) -> str:
     """Viena marķiera raksti vienā FTS grupā: ("12x16mm" OR "12" OR "16").
 
-    Grupa AND ķēdē turas kā viens vārds — tā izmēra pieraksts drīkst mainīties,
-    nesabrūkot prasībai, ka pārējie vārdi sakrīt.
+    Grupa AND ķēdē turas kā viens vārds, tāpēc izmēra pieraksts drīkst mainīties.
     """
     parts = [
         f"{_quote(form)}*" if prefix and _prefixable(form) else _quote(form)
@@ -199,12 +188,7 @@ def _fold(text: str) -> str:
 
 
 def _contains(haystack: str, form: str) -> bool:
-    """Vai marķieris ir tekstā.
-
-    Īsiem marķieriem prasām vārda robežu: burts "u" kā apakšvirkne ir teju
-    katrā nosaukumā ("uzmava", "gumijas"), un bez robežas tas pārklājuma
-    pārbaudi padarītu bezjēdzīgu.
-    """
+    """Vai marķieris ir tekstā. Īsiem prasām vārda robežu ("u" ir teju visur)."""
     if not form:
         return False
     if len(form) >= 3:
@@ -221,17 +205,10 @@ def _coverage_filter(
 ) -> tuple[list[Product], bool]:
     """Atsijā `OR` tiera atkritumus. Atgriež (produkti, izmērs sakrita).
 
-    Vaļīgākais variants savieno marķierus ar OR, tāpēc pietiek ar vienu
-    nejaušu sakritību, lai produkts iekļūtu rezultātā. Prasām, lai sakristu
-    vismaz puse no lietotāja meklētajiem vārdiem — citādi bezjēdzīgs
-    jautājums atgrieztu izskatīgu, bet nesaistītu sarakstu.
-
-    IZMĒRS SVER VAIRĀK PAR APZĪMĒTĀJU. Kamēr visi marķieri tika skaitīti
-    vienādi, vaicājums "D veida pašlīmējošs blīvēšanas profils 12mm" atdeva
-    10×15 un 10×13: tie sakrita ar pieciem aprakstošiem vārdiem, un vienīgais
-    skaitlis, kas klientam tiešām bija svarīgs, palika mazākumā. 12 mm profili
-    katalogā ir un ir noliktavā — tie vienkārši nokrita zemāk par griezuma.
-    Tāpēc skaitliskās grupas šķiro pirmās, un tikai tad vārdu pārklājums.
+    Vaļīgākais variants savieno marķierus ar OR, tāpēc prasām vismaz pusi
+    sakritību. IZMĒRS SVER VAIRĀK PAR APZĪMĒTĀJU: kamēr visi marķieri skaitījās
+    vienādi, "D veida pašlīmējošs profils 12mm" atdeva 10×15, jo pieci
+    aprakstošie vārdi pārsvēra vienīgo svarīgo skaitli.
     """
     groups = [
         [_fold(_stem(form)) for form in token_forms(token)]
@@ -242,15 +219,13 @@ def _coverage_filter(
 
     numeric = [g for g in groups if _has_digit(g)]
     words = [g for g in groups if not _has_digit(g)]
-    # Griezums paliek pēc VĀRDU pārklājuma — izmērs pats par sevi nedrīkst
-    # ievilkt pilnīgi citu preci ("12" sakrīt ar pusi kataloga).
+    # Griezums pēc VĀRDU pārklājuma: "12" pats par sevi sakrīt ar pusi kataloga.
     required = max(1, math.ceil(len(groups) / 2))
 
     scored: list[tuple[int, int, int, Product]] = []
     for order, product in enumerate(products):
-        # `aliases` šeit ir obligāti: tur dzīvo klienta vārdi ("pāreja",
-        # "серый", "DN100"), kuru nosaukumā nav. Bez tiem pārklājuma pārbaude
-        # izmet tieši tos rezultātus, kuru dēļ aliasi vispār tika taisīti.
+        # `aliases` obligāti: tur dzīvo klienta vārdi ("pāreja", "серый"),
+        # kuru nosaukumā nav.
         haystack = _fold(
             f"{product.name} {product.aliases} {product.category} "
             f"{product.material or ''} {product.description}"
@@ -268,9 +243,8 @@ def _coverage_filter(
 
     scored.sort()
     top = [product for _, _, _, product in scored[:limit]]
-    # "Izmērs sakrita" nozīmē: pirmais rezultāts sedz VISUS klienta nosauktos
-    # skaitļus. Ja nesedz, izsaucējam par to jāpasaka — klusi atdot tuvāko
-    # citu izmēru ir tieši tā kļūda, ko šis lauks pieķer.
+    # Pirmais rezultāts sedz VISUS klienta skaitļus. Ja nē, izsaucējam
+    # jāpasaka: klusi atdots tuvākais cits izmērs ir tieši šī lauka jēga.
     size_ok = not numeric or bool(scored and -scored[0][0] == len(numeric))
     return top, size_ok
 
@@ -315,8 +289,7 @@ def _build_filters(
         where.append("p.type_code = ? COLLATE NOCASE")
         params.append(type_code.strip().upper())
 
-    # "Produkts iztur šo diapazonu." Produktus bez zināmas temperatūras
-    # izslēdzam apzināti — rūpnieciskā pielietojumā nezināms nav "der".
+    # Bez zināmas temperatūras izslēdzam apzināti: nezināms nav "der".
     if temp_min_required is not None:
         where.append("p.temp_min_c IS NOT NULL AND p.temp_min_c <= ?")
         params.append(temp_min_required)
@@ -451,12 +424,9 @@ def search_products(
                 size_mismatch=not size_ok, fts_query=fts_query,
             )
 
-    # 2. atkāpšanās: tikai pilnteksts, bez atribūtu filtriem.
-    #
-    # To darām TIKAI tad, ja izsaucējs nav norādījis nevienu šķirojošu filtru.
-    # Ja lietotājs prasīja "nerūsējošais AR DN150" un tāda nav, pareizā atbilde
-    # ir "nav", nevis astoņi alumīnija produkti — filtru atmešana klusi maina
-    # jautājumu un rada risku, ka modelis piedāvās nepareizu materiālu.
+    # 2. atkāpšanās: tikai pilnteksts, un TIKAI bez šķirojošiem filtriem. Uz
+    # "nerūsējošais AR DN150" pareizā atbilde ir "nav", ne astoņi alumīnija
+    # produkti: filtru atmešana klusi maina jautājumu.
     discriminating = any(
         value is not None
         for value in (material, dn_mm, type_code, max_price,
@@ -492,12 +462,8 @@ def browse_category(
 ) -> dict[str, Any]:
     """Visi produkti kategorijā, bez teksta meklēšanas.
 
-    Kad nezini, kā produkts katalogā nosaukts, pārlūkošana ir drošāka par
-    minēšanu: kategorijā "Camlock Pārejas" ir 92 produkti, un tos visus var
-    apskatīt, nemēģinot uzminēt pareizo atslēgvārdu.
-
-    `category` ir ceļa daļa ("Camlock Pārejas") — kataloga slug'i ir skaitliski
-    un nelasāmi, tāpēc adresējam pēc nosaukuma.
+    `category` ir ceļa daļa ("Camlock Pārejas"): kataloga slug'i ir skaitliski
+    un nelasāmi.
     """
     if conn is None:
         with db.session() as owned:
@@ -552,10 +518,9 @@ def get_product(sku: str, conn: sqlite3.Connection | None = None) -> Product | N
 def list_categories(
     conn: sqlite3.Connection | None = None, min_count: int = 1
 ) -> list[dict[str, Any]]:
-    """Kataloga koks: saknes kategorijas ar to apakškategorijām.
+    """Kataloga koks: saknes kategorijas ar apakškategorijām.
 
-    Grupējam pēc saknes, jo lapu nosaukumi paši par sevi neko nepasaka —
-    katalogā ir desmitiem kategoriju ar nosaukumu "2mm" vai "EPDM".
+    Grupēts pēc saknes: katalogā ir desmitiem kategoriju "2mm" un "EPDM".
     """
     if conn is None:
         with db.session() as owned:
@@ -577,8 +542,8 @@ def list_categories(
             (row["category_root"],),
         ).fetchall()
 
-        # Divi līmeņi zem saknes: tikai virsraksti neļauj modelim izvēlēties
-        # pareizo apakškategoriju ("Camlock Pārejas" ir 3. līmenī).
+        # Divi līmeņi: "Camlock Pārejas" ir 3. līmenī, un ar virsrakstiem
+        # vien modelis pareizo apakškategoriju izvēlēties nevar.
         level2: dict[str, int] = {}
         level3: dict[str, int] = {}
         for sub in subs:

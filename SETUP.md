@@ -10,7 +10,14 @@ No tukšas mašīnas līdz pirmajai sagatavotajai vēstulei. Ap 5 minūtēm, no 
 | Python | 3.12+ | `python3 --version` |
 | [uv](https://docs.astral.sh/uv/) | 0.11+ | `uv --version` |
 | git | jebkura | `git --version` |
-| OpenAI API atslēga | — | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| Claude Code | jebkura | `claude --version` |
+
+Noklusējuma dzinējs ir `claude`: aģents iet caur Claude Agent SDK un maksā no
+abonementa, tāpēc API atslēga nav vajadzīga. Jābūt tikai uzstādītam un
+pieteiktam Claude Code.
+
+Ja gribi veco ceļu caur OpenAI, `.env` liec `ESUPPLIER_ENGINE=openai` un
+[OpenAI atslēgu](https://platform.openai.com/api-keys).
 
 Python versiju `uv` uzstādīs pats, ja tās nav — `.python-version` prasa 3.12.
 
@@ -52,9 +59,11 @@ cp .env.example .env
 $EDITOR .env
 ```
 
-Obligāts ir viens:
+Ar noklusējuma dzinēju (`claude`) obligātu mainīgo **nav**: modelis nāk no
+abonementa. `openai` dzinējam obligāts ir viens:
 
 ```
+ESUPPLIER_ENGINE=openai
 OPENAI_API_KEY=sk-proj-...
 ```
 
@@ -62,7 +71,9 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 
 | Mainīgais | Noklusējums | Kad aiztikt |
 |---|---|---|
-| `ESUPPLIER_MODEL` | `gpt-5.6-luna` | ja kontam šis modelis nav pieejams |
+| `ESUPPLIER_ENGINE` | `claude` | `openai`, ja abonementa ceļš neder |
+| `ESUPPLIER_CLAUDE_MODEL` | `claude-opus-5` | cits modelis abonementa ceļā |
+| `ESUPPLIER_MODEL` | `gpt-5.6-luna` | `openai` dzinējam, ja kontam šis nav pieejams |
 | `ESUPPLIER_EFFORT` | `medium` | `minimal` ir lētāk, bet retāk ķeras pie rīkiem |
 | `ESUPPLIER_DB` | `data/catalog.db` | cits kataloga ceļš |
 | `ESUPPLIER_ANSWERS` | `atbildes/` | kur krīt sagatavotās vēstules |
@@ -145,7 +156,7 @@ uv run sync --source=scrape     # rezerves ceļš: sitemap + JSON-LD, lēnāk
 uv run pytest
 ```
 
-Gaidāms `443 passed` zem divām sekundēm. Testi neiet tīklā un nemaksā
+Gaidāms `466 passed` zem divām sekundēm. Testi neiet tīklā un nemaksā
 tokenus. Daļa meklēšanas testu prasa `data/catalog.db` — bez tā tie tiek
 izlaisti, ne kritīs.
 
@@ -174,6 +185,36 @@ Ievade ir daudzrindu — ielīmē visu klienta vēstuli un pabeidz ar rindu `.`
 pats un atstāj atbildes kā melnrakstus.
 
 Vispirms pārbaudi savienojumu un to, vai melnrakstu mape ir atrasta:
+
+```bash
+uv run mail --check
+```
+
+Gaidāmā izvade:
+
+```
+Savienojums ir. INBOX: 12 vēstules
+Neapstrādātas: 3
+Mapes: Sent, Junk, Trash, Drafts, INBOX
+Melnraksti -> Drafts
+```
+
+`--check` modeli neizsauc un tokenus nemaksā. Ja kaut kas nav kārtībā, kļūdas
+tekstā ir arī tas, ko ar to darīt.
+
+**Gmail.** Mainās trīs rindas, koda izmaiņas nav vajadzīgas:
+
+```
+ESUPPLIER_IMAP_HOST=imap.gmail.com
+ESUPPLIER_IMAP_USER=vards@gmail.com
+ESUPPLIER_IMAP_PASSWORD=<App Password>
+```
+
+Parastā konta parole neder: Google to IMAP pieslēgumiem nepieņem kopš 2022.
+gada. Kontam jāieslēdz divpakāpju verifikācija, jāizveido App Password un
+Gmail iestatījumos jāieslēdz IMAP. Sīkāk — README sadaļa "Gmail".
+
+Kad `--check` ir zaļš, var pārbaudīt visu ceļu:
 
 ```bash
 uv run mail --dry-run
@@ -216,8 +257,13 @@ atbildes/piedavajums-20260904-081712-IEKSEJI.txt   <- kas jāizdara ar roku
 
 ## 7. Kad kaut kas nestrādā
 
+**`Neatradu Claude Code.`** Noklusējuma dzinējs iet caur Claude Agent SDK, un
+tam vajag uzstādītu un pieteiktu Claude Code (`claude --version`). Vai arī liec
+`.env` failā `ESUPPLIER_ENGINE=openai` un OpenAI atslēgu.
+
 **`Trūkst OPENAI_API_KEY. Nokopē .env.example uz .env un ieliec atslēgu.`**
-`.env` nav vai atslēga tukša. Fails jābūt projekta saknē, ne `src/`.
+`ESUPPLIER_ENGINE=openai`, bet `.env` nav vai atslēga tukša. Fails jābūt
+projekta saknē, ne `src/`.
 
 **`Katalogs tukšs. Palaid: uv run sync`**
 Sinhronizācija nav palaista vai `ESUPPLIER_DB` rāda uz citu failu.
@@ -249,6 +295,13 @@ izslēdz atšifrēšanu ar `ESUPPLIER_ATTACHMENT_VISION=0`.
 **Iekšējā blokā stāv "jāatver ar roku (LibreOffice uz servera nav)".** Vecais
 `.doc` vai `.ppt`. Uzstādi LibreOffice vai norādi ceļu `ESUPPLIER_SOFFICE`
 mainīgajā.
+
+**`Application-specific password required`** (Gmail). Parastā konta parole.
+Ieslēdz divpakāpju verifikāciju, izveido App Password un ieliec to
+`ESUPPLIER_IMAP_PASSWORD` vietā.
+
+**`IMAP access is disabled`** (Gmail). Ieslēdz IMAP: Settings -> Forwarding and
+POP/IMAP. Workspace domēnā to var būt aizliedzis administrators.
 
 **`Neatradu melnrakstu mapi.`** Serveris nedod `\Drafts` karogu un mape saucas
 citādi. Kļūdas tekstā ir visu mapju saraksts — izvēlies pareizo un ieliec to

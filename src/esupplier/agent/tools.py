@@ -10,23 +10,16 @@ from typing import Any
 from ..catalog import normalize
 from ..catalog import search as catalog_search
 
-#: Cik produktu maksimāli atdodam modelim vienā rīka izsaukumā. Zems apzināti:
-#: 28 rezultāti vienā gājienā noēda 22k tokenu un nepadarīja atbildi labāku.
-#: Sešiem ir vēl viens iemesls: vēstulē tāpat nonāk 2–3 varianti, un pārējie
-#: tikai dod modelim iespēju izvēlēties sliktāk.
+#: Cik produktu atdodam vienā rīka izsaukumā. Zems apzināti: 28 rezultāti
+#: noēda 22k tokenu, un vēstulē tāpat nonāk 2–3 varianti.
 MAX_RESULTS = 6
-#: `browse_category` drīkst vairāk — tur mērķis ir pārskats, ne izlase. Bet
-#: ne 100: kategorijas saraksts paliek vēsturē un tiek pārsūtīts pie KATRA
-#: nākamā rīka izsaukuma, tāpēc viena 100 ierakstu lapa astoņu izsaukumu
-#: gājienā maksā astoņas reizes. 30 pietiek, lai ģimeni atpazītu, un lapot
-#: var tālāk.
+#: `browse_category` drīkst vairāk: tur mērķis ir pārskats. Bet ne 100 —
+#: saraksts paliek vēsturē un tiek pārsūtīts pie KATRA nākamā izsaukuma.
 MAX_BROWSE = 30
 #: Cik gara apraksta daļa nonāk `get_product` atbildē.
 DESCRIPTION_LIMIT = 1200
 
-#: Rīku definīcijas neitrālā formā (nosaukums / apraksts / parametri), lai
-#: tās varētu pārnest uz citu API bez pārrakstīšanas. OpenAI formātu no tām
-#: uzbūvējam zemāk.
+#: Rīku definīcijas neitrālā formā, lai tās varētu pārnest uz citu API.
 TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "search_products",
@@ -218,8 +211,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
 ]
 
 
-#: Tas pats OpenAI Responses API formātā — tur rīks ir plakans, bez ligzdotā
-#: "function" objekta (atšķirībā no Chat Completions).
+#: Tas pats Responses API formātā: rīks ir plakans, bez "function" objekta.
 TOOLS: list[dict[str, Any]] = [{"type": "function", **spec} for spec in TOOL_SPECS]
 
 TOOL_NAMES = frozenset(spec["name"] for spec in TOOL_SPECS)
@@ -248,10 +240,8 @@ def _clamp(value: Any, low: int, high: int, default: int) -> int:
 def _positive(value: Any) -> float | None:
     """Nulli un tukšumu lasām kā "nav norādīts".
 
-    Modeļi mēdz aizpildīt visus neobligātos parametrus ar noklusējumiem
-    (`max_price: 0`, `dn_mm: 0`) tā vietā, lai tos izlaistu. Šeit 0 nekad nav
-    jēdzīga vērtība — cena 0 un diametrs 0 neatlasītu neko, un meklēšana
-    klusi nokristu uz rezerves ceļu ar atmestiem filtriem.
+    Modeļi neobligātos parametrus mēdz aizpildīt ar noklusējumiem. Cena 0 un
+    diametrs 0 neatlasītu neko, un meklēšana klusi nokristu uz rezerves ceļu.
     """
     if value in (None, "", False):
         return None
@@ -265,8 +255,7 @@ def _positive(value: Any) -> float | None:
 def _temperatures(args: dict[str, Any]) -> tuple[float | None, float | None]:
     """Temperatūras pāris, kur 0 var būt gan īsts, gan aizpildīts noklusējums.
 
-    0 °C ir pilnīgi reāla darba temperatūra, tāpēc to vienu pašu neizmetam.
-    Bet 0..0 nav diapazons, ko kāds prasītu — to lasām kā "nav norādīts".
+    0 °C ir reāla temperatūra; 0..0 nav diapazons, ko kāds prasītu.
     """
     low = args.get("temp_min_required")
     high = args.get("temp_max_required")
@@ -287,14 +276,9 @@ def _drop_dn_for_profiles(
 ) -> tuple[float | None, str | None]:
     """Profila vaicājumam `dn_mm` ir vienmēr kļūda — izmetam to.
 
-    Profilam diametra nav: "2x8x12mm" ir sprauga × platums × augstums. Kad kāds
-    no šiem skaitļiem nonāk `dn_mm` filtrā, meklēšana izmet tieši to preci, ko
-    klients prasīja, un atgriež nesaistītu apaļu profilu ar to pašu skaitli.
-
-    Gan sistēmas prompts, gan rīka apraksts to aizliedz, un modelis to tāpat
-    dara: "D veida pašlīmējošs profils 12 mm" aizgāja ar `dn_mm=12`, un no
-    visa kataloga atgriezās viens O veida profils Ø10. Aizliegums, ko var
-    neievērot, nav aizsardzība — tāpēc filtru noņemam šeit.
+    Profilam diametra nav: "2x8x12mm" ir sprauga × platums × augstums, un tāds
+    filtrs izmet tieši prasīto preci. Prompts to aizliedz, bet modelis tāpat
+    dara, un aizliegums, ko var neievērot, nav aizsardzība.
     """
     if dn is None or not normalize.is_profile(query):
         return dn, None
@@ -318,9 +302,8 @@ def _run_search(args: dict[str, Any], conn: sqlite3.Connection) -> tuple[dict[st
         type_code=(args.get("type_code") or "").strip() or None,
         temp_min_required=temp_min,
         temp_max_required=temp_max,
-        # Tikai True filtrē. `food_grade=False` nozīmētu "rādi TIKAI
-        # nesertificētos", ko neviens neprasa — bet modelis to mēdz aizpildīt
-        # kā noklusējumu, un tad pārtikas produkti tiktu izmesti ārā.
+        # Tikai True filtrē: `food_grade=False` kā aizpildīts noklusējums
+        # izmestu ārā tieši pārtikas produktus.
         food_grade=True if args.get("food_grade") is True else None,
         category=(args.get("category") or "").strip() or None,
         in_stock_only=bool(args.get("in_stock_only")),

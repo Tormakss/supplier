@@ -38,10 +38,9 @@ def _now() -> str:
 
 
 def _strip_html(raw: str | None) -> str:
-    """Nogriež HTML un uzreiz vienādo tipogrāfiskās rakstzīmes.
+    """Nogriež HTML un vienādo tipogrāfiskās rakstzīmes.
 
-    `clean_text` te ir obligāts: katalogā collas rakstītas ar U+2033 (``4″``),
-    un bez pārveides ne lietotāja ``4"``, ne collu parsēšana nesakrīt.
+    `clean_text` obligāts: collas katalogā ir U+2033, ne parastā pēdiņa.
     """
     if not raw:
         return ""
@@ -60,9 +59,8 @@ def _stock_qty(text: str) -> int | None:
 def _first_image(images: Any) -> str:
     """Pirmās bildes pilnā adrese.
 
-    Ņemam `src`, nevis `thumbnail`: 300x300 sīktēls e-pastā, kur klients
-    salīdzina divas gandrīz vienādas blīves, ir par mazu. Platumu ierobežo
-    HTML, nevis avota fails.
+    `src`, ne `thumbnail`: 300x300 e-pastā ir par mazu, lai salīdzinātu divas
+    gandrīz vienādas blīves. Platumu ierobežo HTML.
     """
     for image in images or []:
         if not isinstance(image, dict):
@@ -79,8 +77,7 @@ def _first_image(images: Any) -> str:
 def _price_excl_vat(item: dict[str, Any], incl: float | None) -> float | None:
     """Cena bez PVN.
 
-    Store API `prices.price` nāk AR PVN. Cenu bez PVN veikals renderē
-    `price_html` atribūtā `data-no-tax`; ja tā nav, dalām ar PVN likmi.
+    `prices.price` nāk AR PVN; bez PVN ir `price_html` atribūtā `data-no-tax`.
     """
     m = re.search(r'data-no-tax="([\d.,]+)', item.get("price_html") or "")
     if m:
@@ -114,15 +111,9 @@ def _name_from_slug(slug: str) -> str:
 def build_category_paths(categories: list[dict[str, Any]]) -> dict[int, list[str]]:
     """Kategorijas ID -> ceļš no saknes līdz lapai.
 
-    Produktā ir tikai lapas kategorija ("EPDM", "2mm"), kas pati par sevi neko
-    nepasaka. Īsto koku zina tikai `/products/categories`, tāpēc to salasām
-    pirms produktiem.
-
-    Bet ne visu: starpkategorijas, kurās nav produktu tieši (ir tikai
-    apakškategorijas), Store API sarakstā NEPARĀDĀS. Tā pazuda "U Tips", un
-    visiem U profiliem ceļš sabruka līdz "EPDM" — `browse_category("U Tips")`
-    neatrada neko, lai gan katalogā ir 53 U profili. Trūkstošos posmus
-    atjaunojam no kategorijas adreses, kurā ceļš vienmēr ir pilns.
+    Produktā ir tikai lapas kategorija ("EPDM"), koku zina `/products/categories`.
+    Starpkategorijas bez tiešiem produktiem tur NEPARĀDĀS — tā pazuda "U Tips",
+    un ceļš sabruka līdz "EPDM". Trūkstošos posmus ņemam no adreses.
     """
     by_id = {int(c["id"]): c for c in categories if c.get("id") is not None}
     by_slug = {
@@ -187,9 +178,7 @@ def parse_store_product(
 
     fields = normalize.normalize_attributes(name, attributes, f"{short} {description}")
 
-    # Pārejas otrais diametrs + tipa kods + meklēšanas aliasi.
-    # Profiliem nosaukuma izmērus par diametru NEPĀRVĒRŠAM (skat. is_profile);
-    # atribūtos norādīts DN paliek spēkā, ja tāds tiešām ir.
+    # Profiliem nosaukuma izmērus par diametru NEPĀRVĒRŠAM (skat. is_profile).
     dn_first, dn_second = normalize.parse_dn_pair(name)
     if normalize.is_profile(name):
         dn_first = dn_second = None
@@ -453,8 +442,7 @@ def run_sync(source: str = "api", full: bool = False, progress=None, batch: int 
         except httpx.HTTPError as exc:
             say(f"Kategorijas neizdevās ielādēt: {exc}")
 
-        # Mērvienību izņēmumus nolasām vienreiz — fails ir mazs, bet to
-        # lasīt pie katra no 3568 produktiem nav ko.
+        # Vienreiz: lasīt to pie katra no 3568 produktiem nav ko.
         unit_overrides = units.load_overrides()
         if unit_overrides:
             say(f"Mērvienību izņēmumi: {len(unit_overrides)} artikuli")
@@ -475,8 +463,7 @@ def run_sync(source: str = "api", full: bool = False, progress=None, batch: int 
         if buffer:
             count += db.upsert_products(conn, buffer)
 
-        # Scrape ceļš kategorijas nezina, un likumi var būt mainīti kopš
-        # pēdējās reizes — pārrēķinām mērvienības visam katalogam.
+        # Scrape ceļš kategorijas nezina, un likumi var būt mainīti.
         by_unit = units.apply_units(conn, unit_overrides)
         say("Mērvienības: " + ", ".join(f"{u}={n}" for u, n in sorted(by_unit.items())))
 

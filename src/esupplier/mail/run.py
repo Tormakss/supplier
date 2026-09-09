@@ -1,16 +1,13 @@
 """Pastkastītes gājiens: izlasi jaunās vēstules, atstāj melnrakstus.
 
-Palaišana:
-
     uv run mail                 # seko pastkastītei, līdz nospiež Ctrl+C
     uv run mail --once          # viens gājiens un ārā (cron, pārbaudes)
-    uv run mail --dry-run       # viss tas pats, bet melnraksts pastkastītē neaiziet
+    uv run mail --dry-run       # viss tas pats, bet melnraksts neaiziet
     uv run mail --retry-failed  # atkārto tās, kas iepriekš krita
     uv run mail --log           # ko jau esam apstrādājuši
 
-Melnrakstā aiziet TIKAI vēstule klientam. Menedžera uzdevumi paliek konsolē
-un failā `atbildes/*-IEKSEJI.txt`: melnraksts ir domāts nosūtīšanai bez
-labošanas, un bloks, kas pirms tam jāizdzēš ar roku, kādreiz paliks neizdzēsts.
+Melnrakstā aiziet TIKAI vēstule klientam: tas ir domāts nosūtīšanai bez
+labošanas. Menedžera uzdevumi paliek konsolē un `atbildes/*-IEKSEJI.txt`.
 """
 
 from __future__ import annotations
@@ -55,13 +52,9 @@ class Outcome:
 def _augment_internal(internal: str, warnings: list[str], notes: list[str]) -> str:
     """Pieliek iekšējam blokam to, ko konsolē būtu pateikusi programma.
 
-    Izmestas bildes un saites, iekšējās adreses noplūde, sasniegts rīku limits —
-    konsolē par to brīdina programma. `--watch` režīmā konsolē neviens
-    neskatās, tāpēc brīdinājumam jāpaliek arī failā blakus vēstulei.
-
-    `notes` ir atlikums. Tas nav brīdinājums, bet skaitlis, ko modelis NEREDZ
-    un tāpēc nevar ne pateikt klientam, ne uzrakstīt šeit. Menedžerim tas
-    vajadzīgs katrā vēstulē, ne tikai tad, kad kaut kas nogāja greizi.
+    Sekošanas režīmā konsolē neviens neskatās, tāpēc brīdinājumam jāpaliek arī
+    failā. `notes` ir atlikums — skaitlis, ko modelis NEREDZ un pats uzrakstīt
+    nevar.
     """
     blocks = []
     if warnings:
@@ -92,13 +85,10 @@ def process_one(
     if reason:
         return Outcome(incoming, "skipped", reason)
 
-    # Skenēts rasējums un telefona foto teksta slāni nesatur; vienīgais, kas
-    # tos izlasa, ir modelis, kurš attēlu redz. Solis notiek ŠEIT, ne parsējot:
-    # `parse_message` ir tīra funkcija bez tīkla, un tā tai jāpaliek.
+    # ŠEIT, ne parsējot: `parse_message` ir tīra funkcija bez tīkla.
     vision.transcribe(incoming.attachments, client)
 
-    # Katrai vēstulei SAVA vēsture. Kopīgs saraksts nozīmētu, ka otrā klienta
-    # pieprasījumam modelis redz pirmā klienta preces un cenas.
+    # Katrai vēstulei SAVA vēsture: citādi otrs klients redz pirmā cenas.
     messages: list[dict[str, Any]] = [{"role": "user", "content": as_prompt(incoming)}]
     try:
         result = run_turn(messages, conn=conn, client=client)
@@ -106,9 +96,8 @@ def process_one(
         return Outcome(incoming, "failed", f"aģenta kļūda: {exc}")
 
     if result.truncated:
-        # Apcirsta atbilde ir tieši tā, ko nedrīkst likt melnrakstā: iekšējais
-        # bloks ir pēdējais, ko modelis raksta, tāpēc apcirpta atbilde izskatās
-        # pēc pilnas vēstules, kurai vienkārši "nav ko piebilst".
+        # Iekšējais bloks ir pēdējais, ko modelis raksta, tāpēc apcirsta
+        # atbilde izskatās pēc pilnas, kurai "nav ko piebilst".
         return Outcome(incoming, "failed", "atbilde tika apcirsta — melnraksts netaisīts")
 
     letter, internal = report.split_answer(result.text)
@@ -130,15 +119,14 @@ def process_one(
             + ". Saiti uz preci pieliec ar roku."
         )
     for line in report.stock_leaks(letter):
-        # Modelis atlikuma skaitli neredz, tāpēc katrs tāds skaitlis vēstulē ir
-        # izdomāts. Klientam tas kļūst par solījumu.
+        # Modelis atlikumu neredz: katrs tāds skaitlis ir izdomāts solījums.
         warnings.append(f"Vēstulē ir atlikuma skaitlis vai vārds, izņem to: {line}")
     leaks = report.contact_leaks(letter)
     for leak in leaks:
         warnings.append(f"Vēstulē palika mūsu iekšējā adrese, izņem to: {leak}")
 
-    # Izcelsmes pārbaude: vēstulē drīkst būt tikai tas, ko rīks ŠAJĀ gājienā
-    # tiešām atdeva. Promptā tas ir pirmais noteikums, bet prompts nav pārbaude.
+    # Vēstulē drīkst būt tikai tas, ko rīks ŠAJĀ gājienā tiešām atdeva.
+    # Promptā tas ir pirmais noteikums, bet prompts nav pārbaude.
     seen = report.tool_provenance(result.tool_calls)
     invented_skus = report.unbacked_skus(letter, seen.skus)
     if invented_skus:
@@ -161,9 +149,7 @@ def process_one(
         )
     transcribed = incoming.transcribed_attachments
     if transcribed:
-        # Atsevišķi no nolasītajiem, un stiprāk. Excel aile ir tas, kas failā
-        # rakstīts; atšifrējums ir tas, ko modelis attēlā saskatīja, un kļūda
-        # tur ir tieši izmērā, pēc kura tiek izvēlēta prece.
+        # Stiprāk nekā par nolasītiem: atšifrējumā kļūda ir tieši izmērā.
         warnings.append(
             "Šo pielikumu tekstu modelis NOLASĪJA NO ATTĒLA: "
             + ", ".join(item.name for item in transcribed)
@@ -171,9 +157,7 @@ def process_one(
         )
     read = [item for item in incoming.attachments if item.read and not item.transcribed]
     if read:
-        # Izvilkums nav oriģināls: tabulas aile, izmēra atzīme vai rasējuma
-        # bilde tajā var nebūt. Menedžerim jāzina, ka piedāvājuma daļa nāk no
-        # faila, ko pats vēl nav atvēris.
+        # Izvilkums nav oriģināls: aile vai rasējuma bilde tajā var nebūt.
         warnings.append(
             "Pielikumu saturs nolasīts automātiski un aizgāja modelim: "
             + ", ".join(item.name for item in read)
@@ -194,14 +178,9 @@ def process_one(
     answer_path = ""
     internal_path = ""
     try:
-        # HTML fails mapē `atbildes/` ir vēstule klientam — bez piezīmēm, tāpat
-        # kā līdz šim. Tas ir arī vienīgais, kas paliek, ja melnraksts pazuda
-        # vai serveris `APPEND` noraidīja.
+        # Vienīgais, kas paliek, ja melnraksts pazuda vai `APPEND` noraidīja.
         path, _dropped = report.save_answer(result.text, conn=conn)
         answer_path = str(path)
-        # Piezīmes — blakus, atsevišķā .txt. Melnrakstā to nav: melnraksts ir
-        # domāts nosūtīšanai bez labošanas, un bloks, kas pirms tam jāizdzēš ar
-        # roku, agri vai vēlu paliek neizdzēsts.
         if internal.strip():
             internal_path = str(report.save_internal(internal, answer_path=path))
     except OSError:
@@ -231,11 +210,7 @@ def process_one(
 
 
 def skip_reason_for(incoming: Incoming) -> str:
-    """`skip_reason` uz jau izparsētas vēstules.
-
-    Galvenes pārbaudi veic `message.skip_reason`; šeit paliek tas, ko var
-    pateikt bez MIME objekta.
-    """
+    """`skip_reason` tam, ko var pateikt bez MIME objekta."""
     if not incoming.has_content:
         return "tukšs ķermenis"
     if not incoming.recipient:
@@ -255,13 +230,8 @@ def run_once(
 ) -> list[Outcome]:
     """Viens gājiens: savienojums, jaunās vēstules, melnraksti, savienojums ciet.
 
-    Savienojumu katram gājienam veram no jauna. Sekošanas režīmā sesija stāv
-    atvērta stundām, un IMAP serveri neaktīvu savienojumu kādā brīdī nomet —
-    tad nākamais gājiens kristu tur, kur iepriekšējais strādāja.
-
-    `announce=False` klusē, kad jaunu vēstuļu nav. Sekošanas režīmā tas ir
-    vienīgais, kas notiek 99% gājienu, un rinda par to katru minūti aizber
-    ekrānu tā, ka īstie melnraksti tajā pazūd.
+    Savienojumu katram gājienam veram no jauna: IMAP serveri neaktīvu
+    savienojumu nomet. `announce=False` klusē, kad jaunu vēstuļu nav.
     """
     outcomes: list[Outcome] = []
     box = Mailbox(folder=folder)
@@ -291,8 +261,7 @@ def run_once(
                 box.mark(uid)
                 continue
 
-            # Galvenes filtru palaižam uz MIME objekta, jo `List-Id` un
-            # `Auto-Submitted` izparsētajā `Incoming` vairs nav.
+            # Uz MIME objekta: `List-Id` un `Auto-Submitted` `Incoming` nav.
             mime = BytesParser(policy=policy.default).parsebytes(raw)
             header_reason = skip_reason(
                 mime,
@@ -329,8 +298,7 @@ def run_once(
     return outcomes
 
 
-#: Cik ilgi pauze drīkst augt, kad serveris neatbild. Desmit minūtes ir robeža,
-#: aiz kuras atgriešanās vairs nav "tūlīt", bet ekrāns ar kļūdām neaizbirst.
+#: Cik ilgi pauze drīkst augt, kad serveris neatbild.
 _MAX_BACKOFF_S = 600
 
 _COLOURS = {"drafted": "green", "skipped": "dim", "failed": "red"}
@@ -343,9 +311,7 @@ def _report_outcome(console: Console, outcome: Outcome) -> None:
         f"[{colour}]{_LABELS[outcome.status]}[/{colour}] {outcome.incoming.display}"
         + (f" [dim]({outcome.reason})[/dim]" if outcome.reason else "")
     )
-    # Iekšējais bloks melnrakstā vairs neiet, tāpēc konsole ir vieta, kur
-    # menedžeris to redz. Rādām VISU: uzdevums, ko neviens neizlasīja, nav
-    # labāks par uzdevumu, kas nekad netika uzrakstīts.
+    # Iekšējais bloks melnrakstā neiet, tāpēc rādām VISU šeit.
     for line in outcome.internal.splitlines():
         if line.strip():
             console.print(f"   [cyan]{line.rstrip()}[/cyan]")
@@ -360,9 +326,7 @@ def _report_outcome(console: Console, outcome: Outcome) -> None:
 def _wait(console: Console, delay: int, totals: dict[str, int]) -> None:
     """Pauze starp pārbaudēm ar dzīvu rindu ekrāna apakšā.
 
-    Rinda pārrakstās pati un vēsturē nepaliek. Bez tās sekošanas režīms
-    izskatās pēc pakārušās programmas: pēdējais izvades gabals var būt vairākas
-    stundas vecs, un nav kā pateikt, vai tā vēl skatās pastkastītē.
+    Bez tās sekošanas režīms izskatās pēc pakārušās programmas.
     """
     stamp = datetime.now().strftime("%H:%M:%S")
     line = (
@@ -378,7 +342,7 @@ def _unmark_all(console: Console, rows: list[Any], *, folder: str = "") -> None:
     """Noņem mūsu atslēgvārdu, lai `search_new` vēstules atkal atdod.
 
     Bez šī `--redo` klusi neko nedarītu: SQLite ieraksts ir izmests, bet
-    pastkastītē vēstulei joprojām stāv `$AiDrafted`, un meklēšana to neatgriež.
+    `$AiDrafted` pastkastītē paliek.
     """
     uids = [row["uid"] for row in rows if row["uid"]]
     if not uids:
@@ -393,6 +357,29 @@ def _unmark_all(console: Console, rows: list[Any], *, folder: str = "") -> None:
         console.print(f"[yellow]! Atslēgvārdu noņemt neizdevās: {exc}[/yellow]")
     finally:
         box.close()
+
+
+def check_mailbox(console: Console, *, folder: str = "") -> int:
+    """Savienojums, mapes un tiesības — bez modeļa un bez rakstīšanas.
+
+    Atšķirībā no `--dry-run` nemaksā tokenus.
+    """
+    box = Mailbox(folder=folder)
+    try:
+        box.connect()
+        total = box.select(readonly=True)
+        console.print(f"[green]Savienojums ir.[/green] {box.folder}: {total} vēstules")
+        console.print(f"[dim]Neapstrādātas: {len(box.search_new())}[/dim]")
+        names = [name for name, _ in box.folders()]
+        console.print(f"[dim]Mapes: {', '.join(names) or 'nav'}[/dim]")
+        # Vienīgā mape, kuras trūkums apstādina visu ceļu.
+        console.print(f"[green]Melnraksti -> {box.drafts_folder()}[/green]")
+    except MailError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    finally:
+        box.close()
+    return 0
 
 
 def _print_log(console: Console, conn: sqlite3.Connection, limit: int) -> None:
@@ -445,9 +432,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--log", nargs="?", type=int, const=20, help="parāda apstrādes žurnālu un iziet"
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="pārbauda tikai savienojumu un mapes; modeli neizsauc, neko neraksta",
+    )
     args = parser.parse_args(argv)
 
     console = Console()
+
+    # Pirms datubāzes un modeļa: pārbaudei nav vajadzīgs ne katalogs, ne atslēga.
+    if args.check:
+        return check_mailbox(console, folder=args.folder)
 
     with db.session() as conn:
         if args.log is not None:
@@ -459,9 +455,8 @@ def main(argv: list[str] | None = None) -> int:
             console.print(f"[dim]Aizmirstas {forgotten} kritušās vēstules.[/dim]")
 
         if args.redo:
-            # Vecais melnraksts pastkastītē PALIEK. Izmest to nozīmētu dzēst
-            # cilvēka mapē kaut ko, ko viņš varbūt jau labojis; divi melnraksti
-            # blakus ir mazākais no ļaunumiem.
+            # Vecais melnraksts PALIEK: dzēst cilvēka mapē kaut ko, ko viņš
+            # varbūt jau labojis, ir sliktāk par diviem melnrakstiem blakus.
             rows = db.forget_recent(conn, args.redo)
             if not rows:
                 console.print("[dim]Žurnālā nav, ko atkārtot.[/dim]")
@@ -534,9 +529,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"[dim]Gājiens beidzies: {totals['drafted']} melnraksti, "
                     f"{totals['skipped']} izlaisti, {totals['failed']} krita.[/dim]"
                 )
-                # Kritusi vēstule ir izejas kods 1: cron par to jāpaziņo. Otrreiz
-                # tā pati vēstule nekritīs — `failed` ieraksts to notur ārpus
-                # cikla, līdz kāds palaiž `--retry-failed`.
+                # Izejas kods 1, lai cron paziņo. Otrreiz tā pati vēstule
+                # nekritīs: `failed` ieraksts to notur līdz `--retry-failed`.
                 return 1 if failed else 0
 
             try:

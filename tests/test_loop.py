@@ -58,7 +58,8 @@ def test_rikulimita_noradijums_nepaliek_vesture() -> None:
 
     from esupplier.agent import loop
 
-    source = inspect.getsource(loop.run_turn)
+    # `run_turn` tagad ir tikai dzinēja izvēle; pats cikls ir `run_turn_openai`.
+    source = inspect.getsource(loop.run_turn_openai)
     limit_block = source.split("hit_iteration_limit = True", 1)[1]
     # Pirms `call_model` ar norādījumu vēsturē neko nepievienojam.
     before_final = limit_block.split("final = call_model", 1)[0]

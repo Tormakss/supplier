@@ -1,8 +1,7 @@
 """Tool calling cikls (OpenAI Responses API).
 
-Responses API, nevis Chat Completions, tāpēc ka gpt-5.x neatļauj rīkus kopā ar
-`reasoning_effort` Chat Completions galapunktā — un domāšanu šeit negribam
-zaudēt: bez tās modelis retāk ķeras pie rīkiem, un šeit viss balstās uz tiem.
+Responses API, ne Chat Completions: gpt-5.x tur neatļauj rīkus kopā ar
+`reasoning_effort`, un bez domāšanas modelis retāk ķeras pie rīkiem.
 """
 
 from __future__ import annotations
@@ -17,6 +16,7 @@ from openai import OpenAI, OpenAIError
 
 from ..catalog import db
 from ..config import (
+    ENGINE,
     MAX_TOKENS,
     MAX_TOOL_ITERATIONS,
     MODEL,
@@ -39,16 +39,14 @@ class AgentResult:
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
-    #: Cik no `input_tokens` nāca no kešatmiņas. Katrs rīku gājiens pārsūta
-    #: visu vēsturi, tāpēc bez šī skaitļa kopsumma izskatās daudz sliktāk,
-    #: nekā maksā patiesībā.
+    #: Cik no `input_tokens` nāca no kešatmiņas. Bez tā kopsumma izskatās
+    #: sliktāk, nekā maksā patiesībā.
     cached_tokens: int = 0
     duration_s: float = 0.0
     status: str | None = None
     hit_iteration_limit: bool = False
-    #: True, ja modelis netika līdz atbildes beigām (`status == "incomplete"`).
-    #: Iekšējais bloks ir pēdējais, ko modelis raksta, tāpēc apcirpšana nogriež
-    #: tieši to — un agrāk tas notika klusi, ja teksta daļa bija neiztukša.
+    #: True, ja modelis netika līdz beigām. Apcirpšana nogriež tieši iekšējo
+    #: bloku, un ar neiztukšu teksta daļu tas notiek klusi.
     truncated: bool = False
 
     @property
@@ -60,7 +58,13 @@ class AgentResult:
         return self.input_tokens + self.output_tokens
 
 
-def build_client() -> OpenAI:
+def build_client() -> OpenAI | None:
+    """Klients modelim. `claude` dzinējam tāda nav: Agent SDK atslēgu neprasa.
+
+    `None` nav izlaidums: ar abonementu pārbaudāmās atslēgas vienkārši nav.
+    """
+    if ENGINE == "claude":
+        return None
     if not OPENAI_API_KEY:
         raise RuntimeError(
             "Trūkst OPENAI_API_KEY. Nokopē .env.example uz .env un ieliec atslēgu."
@@ -90,11 +94,9 @@ def _refusal_text(output: list[Any]) -> str | None:
 def compact_history(messages: list[dict[str, Any]]) -> int:
     """Saīsina IEPRIEKŠĒJO gājienu rīku atbildes. Atgriež ietaupīto zīmju skaitu.
 
-    Katrs rīka izsaukums pārsūta visu vēsturi no jauna, tāpēc vecas
-    meklēšanas rezultāti tiek apmaksāti atkārtoti pie KATRA nākamā izsaukuma —
-    pēc otrā jautājuma tie bija lielākā ievades daļa. Pēdējā gājiena atbildes
-    paliek pilnas (uz tām balstās papildjautājumi "un cik tā pati DN32?"),
-    vecākās nogriežam, atstājot sākumu un norādi, ka rīku var izsaukt vēlreiz.
+    Katrs izsaukums pārsūta visu vēsturi, tāpēc vecas meklēšanas tiek
+    apmaksātas atkārtoti. Pēdējā gājiena atbildes paliek pilnas — uz tām
+    balstās papildjautājumi ("un cik tā pati DN32?").
     """
     last_user = max(
         (i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1
@@ -121,16 +123,32 @@ def run_turn(
     conn: sqlite3.Connection | None = None,
     client: OpenAI | None = None,
 ) -> AgentResult:
-    """Nodzen vienu gājienu: modelis -> rīki -> modelis, līdz atbilde ir gatava.
+    """Viens gājiens ar to dzinēju, kas ieslēgts `ESUPPLIER_ENGINE` mainīgajā.
 
-    `messages` ir Responses API `input` saraksts un tiek papildināts uz vietas,
-    tāpēc sarunas vēsture saglabājas un darbojas papildjautājumi ("un cik tā
-    pati DN32?"). Sistēmas promptu tur neglabājam — to pieliekam katram
-    izsaukumam atsevišķi, lai to var mainīt bez vēstures pārrakstīšanas.
+    Zars ir ŠEIT, ne katrā izsaukuma vietā: divi ceļi ar vienu uzvedību ir
+    vērtīgi tikai tad, kamēr izsaukuma puse ir viena.
+    """
+    if ENGINE == "claude":
+        from .claude_loop import run_turn as claude_run_turn
+
+        return claude_run_turn(messages, max_iterations, conn=conn)
+    return run_turn_openai(messages, max_iterations, conn=conn, client=client)
+
+
+def run_turn_openai(
+    messages: list[dict[str, Any]],
+    max_iterations: int = MAX_TOOL_ITERATIONS,
+    conn: sqlite3.Connection | None = None,
+    client: OpenAI | None = None,
+) -> AgentResult:
+    """Vecais ceļš: OpenAI Responses API, modelis -> rīki -> modelis.
+
+    `messages` tiek papildināts uz vietas, tāpēc vēsture saglabājas. Sistēmas
+    promptu tur neglabājam: to var mainīt bez vēstures pārrakstīšanas.
     """
     if conn is None:
         with db.session() as owned:
-            return run_turn(messages, max_iterations, conn=owned, client=client)
+            return run_turn_openai(messages, max_iterations, conn=owned, client=client)
 
     client = client or build_client()
     result = AgentResult()
@@ -175,8 +193,7 @@ def run_turn(
                 result.text = f"{refusal} {CONTACT_HINT}"
                 break
 
-            # Modeļa gājienu (arī reasoning blokus) atdodam atpakaļ nemainītu —
-            # citādi nākamajā izsaukumā pazūd saite uz call_id.
+            # Nemainītu, arī reasoning blokus: citādi pazūd saite uz call_id.
             messages.extend(item.model_dump(exclude_none=True) for item in response.output)
 
             calls = [item for item in response.output if item.type == "function_call"]
@@ -204,13 +221,9 @@ def run_turn(
                 )
 
             if iteration == max_iterations - 1:
-                # Beidzās gājieni — lūdzam atbildēt ar to, kas jau ir.
-                #
-                # Šo norādījumu vēsturē NEGLABĀJAM. Kamēr tas tur bija, tas
-                # palika spēkā arī nākamajā jautājumā: modelis lasīja "vairāk
-                # rīku izsaukumu nav pieejams", neizsauca nevienu rīku un
-                # atbildēja "nevaru apstiprināt", lai gan limits bija tikko
-                # atjaunots. Tāpēc tas aiziet tikai uz šo vienu izsaukumu.
+                # Beidzās gājieni — lūdzam atbildēt ar to, kas jau ir. Šo
+                # norādījumu vēsturē NEGLABĀJAM: tur tas paliktu spēkā arī
+                # nākamajam jautājumam ar jau atjaunotu limitu.
                 result.hit_iteration_limit = True
                 nudge = {
                     "role": "user",

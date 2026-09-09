@@ -126,9 +126,8 @@ CREATE TRIGGER IF NOT EXISTS products_au AFTER UPDATE ON products BEGIN
 END;
 """
 
-#: Kolonnas, kas pievienotas pēc pirmās versijas. `CREATE TABLE IF NOT EXISTS`
-#: esošu tabulu nepapildina, tāpēc jaunas kolonnas jāpieliek ar ALTER — citādi
-#: vecs `catalog.db` pēc atjauninājuma krīt ar "no such column".
+#: Kolonnas pēc pirmās versijas. `IF NOT EXISTS` esošu tabulu nepapildina,
+#: tāpēc bez ALTER vecs `catalog.db` krīt ar "no such column".
 _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("image_url", "TEXT DEFAULT ''"),
     ("color", "TEXT"),
@@ -244,9 +243,8 @@ def clear_products(conn: sqlite3.Connection) -> None:
 def is_processed(conn: sqlite3.Connection, message_id: str) -> bool:
     """Vai šai vēstulei jau ir bijis gājiens (vienalga ar kādu iznākumu).
 
-    Arī `failed` skaitās apstrādāts: ja modelis vienreiz nokrita, atkārtot to
-    automātiski nozīmē tērēt tokenus tam pašam kritienam katrā gājienā. Cilvēks
-    to atsāk ar `--retry-failed`.
+    Arī `failed` skaitās apstrādāts: atkārtot to automātiski nozīmē tērēt
+    tokenus tam pašam kritienam. Cilvēks to atsāk ar `--retry-failed`.
     """
     if not message_id:
         return False
@@ -299,12 +297,8 @@ def forget_failed(conn: sqlite3.Connection) -> int:
 def forget_recent(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     """Izmet N pēdējos ierakstus un atgriež tos, ko izmeta.
 
-    Vajadzīgs pēc prompta izmaiņas: vecā atbilde tapa pēc veciem noteikumiem,
-    un vienīgais veids pārbaudīt jaunos ir palaist to pašu vēstuli vēlreiz.
-
-    Atgriežam rindas, ne skaitli, jo `uid` no tām vajag IMAP pusē: SQLite
-    ieraksta izmešana vēstuli neatgriež gājienā, kamēr pastkastītē tai stāv
-    mūsu atslēgvārds.
+    Rindas, ne skaitli: `uid` no tām vajag IMAP pusē, jo SQLite ieraksta
+    izmešana vēstuli neatgriež gājienā, kamēr tai stāv mūsu atslēgvārds.
     """
     rows = processed_log(conn, limit)
     if not rows:

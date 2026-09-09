@@ -1,17 +1,12 @@
 """Kataloga rīki Claude Code sesijai (MCP, stdio).
 
-Claude Code iet uz abonementa, un API atslēga tam nav vajadzīga. Bet pats par
-sevi tas neko nezina par e-supplier.lv katalogu, un piedāvājums, kas uzbūvēts
-no atmiņas, ir tieši tas, ko sistēmas prompta pirmais noteikums aizliedz.
-Šis serveris atdod tos PAŠUS četrus rīkus, ko lieto `uv run chat`.
-
-Rīku definīcijas un izpilde nāk no `agent/tools.py` — otras kopijas nav. Tur
-`TOOL_SPECS` jau ir neitrālā formā tieši šim gadījumam.
+Tie PAŠI četri rīki, ko lieto `uv run chat`; definīcijas un izpilde nāk no
+`agent/tools.py`, otras kopijas nav.
 
     uv run mcp          # parasti nepalaiž ar roku; to dara Claude Code
 
-Pieslēgums ir `.mcp.json` repozitorija saknē. Uzvedības noteikumi (cenas ar PVN
-un bez, mērvienības, ko nedrīkst apsolīt) ir prasmē `.claude/skills/piedavajums/`.
+Pieslēgums ir `.mcp.json` saknē; uzvedības noteikumi — prasmē
+`.claude/skills/piedavajums/`.
 """
 
 from __future__ import annotations
@@ -40,10 +35,8 @@ Cenas atdotas divējādi: `price_eur_excl_vat` (bez PVN) un `price_eur_incl_vat`
 def _description(name: str) -> str:
     """Rīka apraksts kopā ar parametru aprakstiem.
 
-    MCP shēmu atvasina no Python paraksta, tāpēc parametru apraksti, kas
-    `TOOL_SPECS` dzīvo atsevišķi, citādi pazustu. Tieši tie pasaka, KAD filtru
-    nelikt ("ja lietotājs nav norādījis diametru, NEIZDOMĀ to"), un tur ir
-    dārgākās kļūdas — izlaista prece, jo filtrs bija izdomāts.
+    MCP shēmu atvasina no Python paraksta, tāpēc `TOOL_SPECS` parametru
+    apraksti citādi pazustu — un tieši tie pasaka, KAD filtru nelikt.
     """
     spec = _SPECS[name]
     lines = [spec["description"]]
@@ -59,9 +52,8 @@ def _description(name: str) -> str:
 def _call(name: str, args: dict[str, Any]) -> str:
     """Rīka izsaukums ar savu savienojumu.
 
-    Savienojumu veram uz katru izsaukumu. Serveris stāv atvērts tik ilgi, cik
-    sesija, un SQLite savienojums, kas nostāvējis stundas, ir lieka riska vieta
-    par ietaupījumu, ko neviens nepamana: katalogs ir lokāls fails.
+    Serveris stāv atvērts visu sesiju, un stundām nostāvējis SQLite savienojums
+    ir lieks risks par ietaupījumu, ko neviens nepamana.
     """
     with db.session() as conn:
         output, _call_record = execute_tool(name, args, conn)
