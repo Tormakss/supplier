@@ -41,7 +41,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## 2. Kods
 
 ```bash
-git clone git@github.com:Tormakss/supplier.git e-supplier
+git clone git@git.trialine.lv:web/ai-assistance.git e-supplier
 cd e-supplier
 ```
 
@@ -49,7 +49,7 @@ Repozitorijs ir **privāts**, tāpēc vajag SSH atslēgu, kas piesaistīta konta
 piekļuvi. Pārbaude:
 
 ```bash
-ssh -T git@github.com          # "Hi <lietotājs>! You've successfully authenticated"
+ssh -T git@git.trialine.lv     # atbild ar lietotājvārdu, ja atslēga der
 ```
 
 ## 3. Atkarības
@@ -102,7 +102,7 @@ Pārējie ir neobligāti; noklusējumi ir `src/esupplier/config.py`.
 
 Pielikumu saturs un klienta vēstule modelim aiziet iežogoti, un artikulus
 ar cenām pirms melnraksta salīdzina ar rīku atbildēm. Abu apraksts ir
-README sadaļā "Svešs teksts un izcelsme".
+DOCS.md sadaļā "Svešs teksts un izcelsme".
 
 **Skenēts rasējums un foto** teksta slāni nesatur; tos izlasa modelis, kurš
 attēlu redz, un katrs tāds pielikums maksā vienu papildu izsaukumu. Modelim
@@ -157,7 +157,7 @@ Gatavs: 3568 produkti, 83.0s
 Skaitļi mainās līdz ar katalogu; pārbaudāmas ir pēdējās divas rindas:
 produktu skaits nav nulle, un mērvienības sadalījušās trīs grupās. Ja `m` un
 `m2` ir 0, kaut kas nav kārtībā ar `data/units.csv` vai kategoriju likumiem —
-skat. README sadaļu "Mērvienības".
+skat. DOCS.md sadaļu "Mērvienības".
 
 Rezultāts ir ~14 MB fails `data/catalog.db`. Tas repozitorijā nenonāk; katrai
 mašīnai savs.
@@ -230,7 +230,7 @@ ESUPPLIER_IMAP_PASSWORD=<App Password>
 
 Parastā konta parole neder: Google to IMAP pieslēgumiem nepieņem kopš 2022.
 gada. Kontam jāieslēdz divpakāpju verifikācija, jāizveido App Password un
-Gmail iestatījumos jāieslēdz IMAP. Sīkāk — README sadaļa "Gmail".
+Gmail iestatījumos jāieslēdz IMAP. Sīkāk — DOCS.md sadaļa "Gmail".
 
 Kad `--check` ir zaļš, var pārbaudīt visu ceļu:
 
